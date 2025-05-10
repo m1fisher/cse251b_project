@@ -178,3 +178,6 @@ cython_debug/
 
 ## Others
 /src_data/
+/test_input.npz
+/train.npz
+/251bproject_env/

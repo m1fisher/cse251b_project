@@ -7,7 +7,7 @@ import tqdm
 from load_data import make_dataloaders
 from models import LSTM
 
-DATA_DIR = "data/"
+DATA_DIR = "src_data/"
 
 def _get_device():
     # Set device for training speedup

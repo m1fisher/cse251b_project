@@ -1,6 +1,39 @@
+import os
+
 import numpy as np
 import torch
-from torch.utils.data import Dataset 
+from torch.utils.data import DataLoader, Dataset
+from torch_geometric.data import Data, Batch
+
+DATA_DIR = "data/"
+
+def make_dataloaders(scale, data_dir):
+    train_data = np.load(os.path.join(data_dir, "train.npz"))['data']
+    N = len(train_data)
+    val_size = int(0.1 * N)
+    train_size = N - val_size
+
+    train_dataset = TrajectoryDatasetTrain(
+        train_data[:train_size], scale=scale, augment=True
+    )
+    val_dataset = TrajectoryDatasetTrain(
+        train_data[train_size:], scale=scale, augment=False
+    )
+
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=32,
+        shuffle=True,
+        collate_fn=lambda x: Batch.from_data_list(x),
+    )
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=32,
+        shuffle=False,
+        collate_fn=lambda x: Batch.from_data_list(x),
+    )
+    return train_dataloader, val_dataloader
+
 
 class TrajectoryDatasetTrain(Dataset):
     def __init__(self, data, scale=10.0, augment=True):

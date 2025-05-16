@@ -31,3 +31,6 @@ typing_extensions==4.13.2
 tzdata==2025.2
 wcwidth==0.2.13
 zipp==3.21.0
+torch-geometric==2.6.1
+torch==2.7.0
+tdqm==0.0.1

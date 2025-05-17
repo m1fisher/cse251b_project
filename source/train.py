@@ -1,15 +1,15 @@
 import os
+import sys
 
 import numpy as np
 import torch
 import tqdm
 
-from load_data import make_dataloaders
+from load_data import DATA_DIR, make_dataloaders
 from models import LSTM
 
-DATA_DIR = "src_data/"
 
-def _get_device():
+def get_device():
     # Set device for training speedup
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -34,7 +34,7 @@ def run_training(model,
 
     scale = 7.0
     train_dataloader, val_dataloader = make_dataloaders(scale, data_dir)
-    device = _get_device()
+    device = get_device()
     model.to(device)
 
     if optimizer is None:
@@ -48,7 +48,7 @@ def run_training(model,
     if criterion is None:
         criterion = torch.nn.MSELoss()
     if epochs is None:
-        epochs = 20
+        epochs = 10
 
     best_val_loss = float("inf")
     no_improvement = 0
@@ -106,5 +106,10 @@ def run_training(model,
                 print("Early stop!")
                 break
 
+
 if __name__ == "__main__":
-   run_training(model=LSTM())
+    filename = sys.argv[1]
+    model = LSTM()
+    run_training(model=model, epochs=100)
+    torch.save(model.state_dict(), filename)
+

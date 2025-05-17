@@ -5,7 +5,11 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Data, Batch
 
-DATA_DIR = "data/"
+DATA_DIR = "src_data/"
+
+def load_test_data(data_dir=DATA_DIR):
+    test_data  = np.load(os.path.join(DATA_DIR, 'test_input.npz'))['data']
+    return test_data
 
 def make_dataloaders(scale, data_dir):
     train_data = np.load(os.path.join(data_dir, "train.npz"))['data']

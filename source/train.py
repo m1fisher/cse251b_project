@@ -48,7 +48,7 @@ def run_training(model,
     if criterion is None:
         criterion = torch.nn.MSELoss()
     if epochs is None:
-        epochs = 10
+        epochs = 20
 
     best_val_loss = float("inf")
     no_improvement = 0
@@ -94,7 +94,7 @@ def run_training(model,
 
         tqdm.tqdm.write(
             (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
-             " | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
+             f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
         )
         if val_loss < best_val_loss - 1e-3:
             best_val_loss = val_loss

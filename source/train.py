@@ -60,7 +60,7 @@ def run_training(model,
             batch = batch.to(device)
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 60, 2)
-            loss = criterion(pred, y)
+            loss = criterion(pred[..., :2], y)  # for models that output all 6-dim, evaluate the loss on only the (x,y)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -77,10 +77,10 @@ def run_training(model,
                 batch = batch.to(device)
                 pred = model(batch)
                 y = batch.y.view(batch.num_graphs, 60, 2)
-                val_loss += criterion(pred, y).item()
+                val_loss += criterion(pred[..., :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
 
                 # show MAE and MSE with unnormalized data
-                pred = pred * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                pred = pred[..., :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
                 y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
                 val_mae += torch.nn.L1Loss()(pred, y).item()
                 val_mse += torch.nn.MSELoss()(pred, y).item()

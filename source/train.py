@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import torch
 import tqdm
+from pathlib import Path
+import yaml
 
 from load_data import DATA_DIR, make_dataloaders
 from models import LSTM
@@ -22,33 +24,41 @@ def get_device():
         print("Using CPU")
     return device
 
-def run_training(model,
-                 optimizer=None,
-                 scheduler=None,
-                 criterion=None,
-                 patience=None,
-                 epochs=None,
-                 data_dir=DATA_DIR):
-    torch.manual_seed(314)
-    np.random.seed(42)
+def run_training(cfg):
+    model_cfg = cfg['model']
+    if model_cfg['name'] == 'lstm':
+        model = LSTM()
+    else:
+        raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
-    scale = 7.0
-    train_dataloader, val_dataloader = make_dataloaders(scale, data_dir)
     device = get_device()
     model.to(device)
+    torch.manual_seed(cfg["training"]['seed'])
+    np.random.seed(cfg["training"]['seed'])
 
-    if optimizer is None:
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    if scheduler is None:
-        scheduler = torch.optim.lr_scheduler.StepLR(
-            optimizer, step_size=20, gamma=0.25
-        )  # You can try different schedulers
-    if patience is None:
-        patience = 10
-    if criterion is None:
-        criterion = torch.nn.MSELoss()
-    if epochs is None:
-        epochs = 10
+    scale = 7.0
+    train_dataloader, val_dataloader = make_dataloaders(scale, DATA_DIR)
+
+    patience = cfg["training"]["patience"]
+    epochs = cfg["training"]["epochs"]
+
+    opt_cfg = cfg["optimizer"]
+    if opt_cfg['name'] == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(),
+                                     lr=opt_cfg["lr"],
+                                     betas=tuple(opt_cfg["beta1"], opt_cfg["beta2"]),
+                                     weight_decay=opt_cfg["weight_decay"])
+    else:
+        raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
+
+    run_dir = Path(cfg["run_dir"])
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=20, gamma=0.25
+    )  # You can try different schedulers
+
+    criterion = torch.nn.MSELoss()
 
     best_val_loss = float("inf")
     no_improvement = 0
@@ -110,6 +120,8 @@ def run_training(model,
 if __name__ == "__main__":
     filename = sys.argv[1]
     model = LSTM()
-    run_training(model=model, epochs=100)
+    with open('/home/zhaoyang-new/School_Work/cse251b_project/configs/base.yaml') as f:
+        cfg = yaml.safe_load('f')
+    run_training(cfg)
     torch.save(model.state_dict(), filename)
 

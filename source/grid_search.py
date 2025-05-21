@@ -32,5 +32,7 @@ if __name__ == "__main__":
         for key_idx, key in enumerate(all_keys.keys()):
             cfg_i['optimizer'][key] = params[key_idx]
         os.makedirs(f"{grid_search_dir}/{out_dir}", exist_ok=True)
-        print(f"running {out_dir}")
+        print(f"running ({params_idx + 1} of {len(products)}): {out_dir}")
         run_training(cfg_i, f"{grid_search_dir}/{out_dir}")
+        with open(f"{grid_search_dir}/{out_dir}/model_cfg.yaml", "w") as file:
+            yaml.dump(cfg_i, file, default_flow_style=False)

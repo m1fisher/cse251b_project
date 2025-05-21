@@ -24,7 +24,8 @@ def get_device():
         print("Using CPU")
     return device
 
-def run_training(cfg):
+
+def run_training(cfg, out_dir):
     model_cfg = cfg['model']
     if model_cfg['name'] == 'lstm':
         model = LSTM()
@@ -51,15 +52,14 @@ def run_training(cfg):
     else:
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
-    run_dir = Path(cfg["run_dir"])
-    run_dir.mkdir(parents=True, exist_ok=True)
-
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=20, gamma=0.25
     )  # You can try different schedulers
 
     criterion = torch.nn.MSELoss()
 
+    fp_write = open(f"{out_dir}/training_epoches.tsv", 'w')
+    fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
     best_val_loss = float("inf")
     no_improvement = 0
     for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
@@ -106,23 +106,24 @@ def run_training(cfg):
             (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
              f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
         )
+        fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\t{val_loss:8.4f}\t{val_mae:8.4f}\t{val_mse:8.4f}\n")
         if val_loss < best_val_loss - 1e-3:
             best_val_loss = val_loss
             no_improvement = 0
-            torch.save(model.state_dict(), "best_model.pt")
+            torch.save(model.state_dict(), f"{out_dir}/best_model.pt")
         else:
             no_improvement += 1
             if no_improvement >= patience:
                 print("Early stop!")
                 break
-    return model
+
+    filename = f"{out_dir}/training_final_model.pt"
+    torch.save(model.state_dict(), filename)
+    fp_write.close()
 
 
 if __name__ == "__main__":
     model_dir = sys.argv[1]
     with open(f'{model_dir}/model_cfg.yaml') as f:
         cfg = yaml.safe_load(f)
-    filename = f"{model_dir}.trained_model.pt"
-    model = run_training(cfg)
-    torch.save(model.state_dict(), filename)
-
+    run_training(cfg, model_dir)

@@ -12,5 +12,3 @@ training:
   epochs: 100
   patience: 10
   seed: 42
-
-run_dir: ./   # overwritten by grid search

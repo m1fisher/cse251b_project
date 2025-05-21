@@ -118,10 +118,9 @@ def run_training(cfg):
 
 
 if __name__ == "__main__":
-    filename = sys.argv[1]
-    model = LSTM()
-    with open('/home/zhaoyang-new/School_Work/cse251b_project/configs/base.yaml') as f:
+    with open('/home/zhaoyang-new/School_Work/cse251b_project/configs/template_cfg.yaml') as f:
         cfg = yaml.safe_load('f')
+    filename = f"{cfg['run_dir']}.trained_model.pt"
     run_training(cfg)
-    torch.save(model.state_dict(), filename)
+    # torch.save(model.state_dict(), filename)
 

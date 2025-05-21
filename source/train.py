@@ -46,7 +46,7 @@ def run_training(cfg):
     if opt_cfg['name'] == 'adam':
         optimizer = torch.optim.Adam(model.parameters(),
                                      lr=opt_cfg["lr"],
-                                     betas=tuple(opt_cfg["beta1"], opt_cfg["beta2"]),
+                                     betas=(opt_cfg["beta1"], opt_cfg["beta2"]),
                                      weight_decay=opt_cfg["weight_decay"])
     else:
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
@@ -115,12 +115,14 @@ def run_training(cfg):
             if no_improvement >= patience:
                 print("Early stop!")
                 break
+    return model
 
 
 if __name__ == "__main__":
-    with open('/home/zhaoyang-new/School_Work/cse251b_project/configs/template_cfg.yaml') as f:
-        cfg = yaml.safe_load('f')
-    filename = f"{cfg['run_dir']}.trained_model.pt"
-    run_training(cfg)
-    # torch.save(model.state_dict(), filename)
+    model_dir = sys.argv[1]
+    with open(f'{model_dir}/model_cfg.yaml') as f:
+        cfg = yaml.safe_load(f)
+    filename = f"{model_dir}.trained_model.pt"
+    model = run_training(cfg)
+    torch.save(model.state_dict(), filename)
 

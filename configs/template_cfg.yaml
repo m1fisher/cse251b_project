@@ -13,4 +13,4 @@ training:
   patience: 10
   seed: 42
 
-run_dir: model_outs/test/   # overwritten by grid search
+run_dir: ./   # overwritten by grid search

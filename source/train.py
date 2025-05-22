@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from load_data import DATA_DIR, make_dataloaders
-from models import LSTM
+from models import LSTM, LinearForecast
 
 
 def get_device():
@@ -29,6 +29,8 @@ def run_training(cfg, out_dir):
     model_cfg = cfg['model']
     if model_cfg['name'] == 'lstm':
         model = LSTM()
+    elif model_cfg['name'] == 'LinearForecast':
+        model = LinearForecast()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 

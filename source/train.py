@@ -77,7 +77,6 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 60, 2)
             loss = criterion(pred[..., :2], y)  # for models that output all 6-dim, evaluate the loss on only the (x,y)
-            print(loss)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)

@@ -7,7 +7,7 @@ import tqdm
 from pathlib import Path
 import yaml
 
-from load_data import DATA_DIR, make_dataloaders
+from load_data import DATA_DIR, make_dataloaders, scale
 from models import LSTM, LinearForecast
 
 
@@ -25,7 +25,7 @@ def get_device():
     return device
 
 
-def run_training(cfg, out_dir):
+def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     model_cfg = cfg['model']
     if model_cfg['name'] == 'lstm':
         model = LSTM()
@@ -38,9 +38,6 @@ def run_training(cfg, out_dir):
     model.to(device)
     torch.manual_seed(cfg["training"]['seed'])
     np.random.seed(cfg["training"]['seed'])
-
-    scale = 7.0
-    train_dataloader, val_dataloader = make_dataloaders(scale, DATA_DIR)
 
     patience = cfg["training"]["patience"]
     epochs = cfg["training"]["epochs"]
@@ -60,7 +57,7 @@ def run_training(cfg, out_dir):
 
     criterion = torch.nn.MSELoss()
 
-    fp_write = open(f"{out_dir}/training_epoches.tsv", 'w')
+    fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
     best_val_loss = float("inf")
     no_improvement = 0
@@ -112,14 +109,14 @@ def run_training(cfg, out_dir):
         if val_loss < best_val_loss - 1e-3:
             best_val_loss = val_loss
             no_improvement = 0
-            torch.save(model.state_dict(), f"{out_dir}/best_model.pt")
+            torch.save(model.state_dict(), f"{out_dir}/best_model.{cfg['k_id']}pt")
         else:
             no_improvement += 1
             if no_improvement >= patience:
                 print("Early stop!")
                 break
 
-    filename = f"{out_dir}/training_final_model.pt"
+    filename = f"{out_dir}/training_final_model.{cfg['k_id']}pt"
     torch.save(model.state_dict(), filename)
     fp_write.close()
 
@@ -128,4 +125,14 @@ if __name__ == "__main__":
     model_dir = sys.argv[1]
     with open(f'{model_dir}/model_cfg.yaml') as f:
         cfg = yaml.safe_load(f)
-    run_training(cfg, model_dir)
+    ## group the kfolds
+    if cfg['kfolds'] == -1:
+        cfg['k_id'] = ''
+        t_dataloader, v_dataloader = make_dataloaders(scale, DATA_DIR)[0]  # default is to output one set of loaders
+        run_training(cfg, model_dir, t_dataloader, v_dataloader)
+    else:
+        dataloaders = make_dataloaders(scale, DATA_DIR, kfold=cfg['kfolds'])
+        for idx, loaders in enumerate(dataloaders):
+            print(f"{idx + 1}-fold started...")
+            cfg['k_id'] = f'k{idx + 1}.'
+            run_training(cfg, model_dir, loaders[0], loaders[1])

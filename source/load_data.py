@@ -4,39 +4,57 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Data, Batch
+from sklearn.model_selection import KFold
 
 DATA_DIR = "src_data/"
+scale = 7.0
 
 def load_test_data(data_dir=DATA_DIR):
     test_data  = np.load(os.path.join(DATA_DIR, 'test_input.npz'))['data']
     return test_data
 
-def make_dataloaders(scale, data_dir):
+def make_dataloaders(scale, data_dir, kfold=-1):
     train_data = np.load(os.path.join(data_dir, "train.npz"))['data']
     N = len(train_data)
-    val_size = int(0.1 * N)
-    train_size = N - val_size
+    split = []
+    if kfold == -1:
+        # not applying k-fold validation, simply taking the 9:1 split
+        val_size = int(0.1 * N)
+        train_size = N - val_size
+        train_dataset = TrajectoryDatasetTrain(
+            train_data[:train_size], scale=scale, augment=True
+        )
+        val_dataset = TrajectoryDatasetTrain(
+            train_data[train_size:], scale=scale, augment=False
+        )
+        split.append([train_dataset, val_dataset])
+    else:
+        kf = KFold(n_splits=kfold, shuffle=True)
+        for train_idx, val_idx in kf.split(train_data):
+            train_dataset = TrajectoryDatasetTrain(
+                train_data[train_idx], scale=scale, augment=True
+            )
+            val_dataset = TrajectoryDatasetTrain(
+                train_data[val_idx], scale=scale, augment=False
+            )
+            split.append([train_dataset, val_dataset])
 
-    train_dataset = TrajectoryDatasetTrain(
-        train_data[:train_size], scale=scale, augment=True
-    )
-    val_dataset = TrajectoryDatasetTrain(
-        train_data[train_size:], scale=scale, augment=False
-    )
-
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=32,
-        shuffle=True,
-        collate_fn=lambda x: Batch.from_data_list(x),
-    )
-    val_dataloader = DataLoader(
-        val_dataset,
-        batch_size=32,
-        shuffle=False,
-        collate_fn=lambda x: Batch.from_data_list(x),
-    )
-    return train_dataloader, val_dataloader
+    datasets = []
+    for train_dataset, val_dataset in split:
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=32,
+            shuffle=True,
+            collate_fn=lambda x: Batch.from_data_list(x),
+        )
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=32,
+            shuffle=False,
+            collate_fn=lambda x: Batch.from_data_list(x),
+        )
+        datasets.append([train_dataloader, val_dataloader])
+    return datasets
 
 
 class TrajectoryDatasetTrain(Dataset):

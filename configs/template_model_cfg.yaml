@@ -12,3 +12,5 @@ training:
   epochs: 100
   patience: 10
   seed: 42
+
+kfolds: -1

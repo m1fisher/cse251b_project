@@ -80,6 +80,10 @@ class TrajectoryDatasetTrain(Dataset):
         hist = scene[:, :50, :].copy()  # (agents=50, time_seq=50, 6)
         future = torch.tensor(scene[0, 50:, :2].copy(), dtype=torch.float32)  # (60, 2)
 
+        def wrap(a):
+            """Map angle to (-π, π]."""
+            return (a + np.pi) % (2 * np.pi) - np.pi
+
         # Data augmentation(only for training)
         if self.augment:
             if np.random.rand() < 0.5:
@@ -91,10 +95,12 @@ class TrajectoryDatasetTrain(Dataset):
                 # Rotate the historical trajectory and future trajectory
                 hist[..., :2] = hist[..., :2] @ R
                 hist[..., 2:4] = hist[..., 2:4] @ R
+                hist[..., 4] = wrap(hist[..., 4] + theta)
                 future = future @ R
             if np.random.rand() < 0.5:
                 hist[..., 0] *= -1
                 hist[..., 2] *= -1
+                hist[..., 4] = wrap(np.pi - hist[..., 4])
                 future[:, 0] *= -1
 
         # Use the last timeframe of the historical trajectory as the origin

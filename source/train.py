@@ -26,6 +26,13 @@ def get_device():
 
 
 def run_training(cfg, out_dir, train_dataloader, val_dataloader):
+    """
+    :param cfg:
+    :param out_dir:
+    :param train_dataloader:
+    :param val_dataloader:  set this to be -1 to run full dataset for training (used for outputing final model)
+    :return:
+    """
     model_cfg = cfg['model']
     if model_cfg['name'] == 'lstm':
         model = LSTM()
@@ -70,51 +77,60 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 60, 2)
             loss = criterion(pred[..., :2], y)  # for models that output all 6-dim, evaluate the loss on only the (x,y)
+            print(loss)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
             train_loss += loss.item()
-
-        # ---- Validation ----
-        model.eval()
-        val_loss = 0
-        val_mae = 0
-        val_mse = 0
-        with torch.no_grad():
-            for batch in val_dataloader:
-                batch = batch.to(device)
-                pred = model(batch)
-                y = batch.y.view(batch.num_graphs, 60, 2)
-                val_loss += criterion(pred[..., :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
-
-                # show MAE and MSE with unnormalized data
-                pred = pred[..., :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
-                y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
-                val_mae += torch.nn.L1Loss()(pred, y).item()
-                val_mse += torch.nn.MSELoss()(pred, y).item()
-
         train_loss /= len(train_dataloader)
-        val_loss /= len(val_dataloader)
-        val_mae /= len(val_dataloader)
-        val_mse /= len(val_dataloader)
-        scheduler.step()
-        # scheduler.step(val_loss)
 
-        tqdm.tqdm.write(
-            (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
-             f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
-        )
-        fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\t{val_loss:8.4f}\t{val_mae:8.4f}\t{val_mse:8.4f}\n")
-        if val_loss < best_val_loss - 1e-3:
-            best_val_loss = val_loss
-            no_improvement = 0
-            torch.save(model.state_dict(), f"{out_dir}/best_model.{cfg['k_id']}pt")
+        if isinstance(val_dataloader, int) and val_dataloader == -1:
+            ## skipping validation as no validation dataset passed in
+            scheduler.step()
+            # scheduler.step(val_loss)
+            tqdm.tqdm.write(
+                f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
+            )
+            fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\n")
         else:
-            no_improvement += 1
-            if no_improvement >= patience:
-                print("Early stop!")
-                break
+            # ---- Validation ----
+            model.eval()
+            val_loss = 0
+            val_mae = 0
+            val_mse = 0
+            with torch.no_grad():
+                for batch in val_dataloader:
+                    batch = batch.to(device)
+                    pred = model(batch)
+                    y = batch.y.view(batch.num_graphs, 60, 2)
+                    val_loss += criterion(pred[..., :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
+
+                    # show MAE and MSE with unnormalized data
+                    pred = pred[..., :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                    y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                    val_mae += torch.nn.L1Loss()(pred, y).item()
+                    val_mse += torch.nn.MSELoss()(pred, y).item()
+
+            val_loss /= len(val_dataloader)
+            val_mae /= len(val_dataloader)
+            val_mse /= len(val_dataloader)
+            scheduler.step()
+            # scheduler.step(val_loss)
+            tqdm.tqdm.write(
+                (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
+                 f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
+            )
+            fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\t{val_loss:8.4f}\t{val_mae:8.4f}\t{val_mse:8.4f}\n")
+            if val_loss < best_val_loss - 1e-3:
+                best_val_loss = val_loss
+                no_improvement = 0
+                torch.save(model.state_dict(), f"{out_dir}/best_model.{cfg['k_id']}pt")
+            else:
+                no_improvement += 1
+                if no_improvement >= patience:
+                    print("Early stop!")
+                    break
 
     filename = f"{out_dir}/training_final_model.{cfg['k_id']}pt"
     torch.save(model.state_dict(), filename)
@@ -127,6 +143,7 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
     ## group the kfolds
     if cfg['kfolds'] == -1:
+        print('Not running kfolds')
         cfg['k_id'] = ''
         t_dataloader, v_dataloader = make_dataloaders(scale, DATA_DIR)[0]  # default is to output one set of loaders
         run_training(cfg, model_dir, t_dataloader, v_dataloader)

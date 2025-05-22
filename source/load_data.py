@@ -13,13 +13,16 @@ def load_test_data(data_dir=DATA_DIR):
     test_data  = np.load(os.path.join(DATA_DIR, 'test_input.npz'))['data']
     return test_data
 
-def make_dataloaders(scale, data_dir, kfold=-1):
+def make_dataloaders(scale, data_dir, kfold=-1, full_train=False):
     train_data = np.load(os.path.join(data_dir, "train.npz"))['data']
     N = len(train_data)
     split = []
     if kfold == -1:
-        # not applying k-fold validation, simply taking the 9:1 split
-        val_size = int(0.1 * N)
+        if not full_train:
+            # not applying k-fold validation, normally will take the 9:1 split
+            val_size = int(0.1 * N)
+        else:
+            val_size = 0
         train_size = N - val_size
         train_dataset = TrajectoryDatasetTrain(
             train_data[:train_size], scale=scale, augment=True

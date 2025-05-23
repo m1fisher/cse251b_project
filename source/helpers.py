@@ -21,3 +21,27 @@ def path_length_ratio(data):
 
     return nonlin
 
+def min_distance(data):
+    """
+    Return the min distance of any vehicle to the ego vehicle in each scene.
+    """
+    # assume `data` is your array of shape (10000, 50, x, 6)
+    # extract only the x,y coordinates:
+    pos = data[..., :2]                 # shape: (10000, 50, x, 2)
+
+    # separate ego and others:
+    ego   = pos[:, 0:1, :, :]          # shape: (10000,  1, x, 2)
+    other = pos[:, 1:,    :, :]        # shape: (10000, 49, x, 2)
+
+    # compute vector difference (broadcast ego across the “agent” axis):
+    diff = other - ego                 # shape: (10000, 49, x, 2)
+
+    # squared distances, summed over x/y:
+    sq_dist = np.sum(diff**2, axis=-1) # shape: (10000, 49, x)
+
+    # for each scene, find the minimum squared‐distance over all agents & timesteps:
+    min_sq = np.min(sq_dist, axis=(1,2))  # shape: (10000,)
+
+    # finally, take the sqrt to get Euclidean distance:
+    min_dist_test = np.sqrt(min_sq)             # shape: (10000,)
+    return min_dist_test

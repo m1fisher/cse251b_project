@@ -24,6 +24,7 @@ def path_length_ratio(data):
 def min_distance(data):
     """
     Return the min distance of any vehicle to the ego vehicle in each scene.
+    Used gpt-o4 to generate this function.
     """
     # assume `data` is your array of shape (10000, 50, x, 6)
     # extract only the x,y coordinates:
@@ -43,5 +44,5 @@ def min_distance(data):
     min_sq = np.min(sq_dist, axis=(1,2))  # shape: (10000,)
 
     # finally, take the sqrt to get Euclidean distance:
-    min_dist_test = np.sqrt(min_sq)             # shape: (10000,)
-    return min_dist_test
+    min_dist = np.sqrt(min_sq)             # shape: (10000,)
+    return min_dist

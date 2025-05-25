@@ -1,14 +1,17 @@
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from typing import Tuple
 
 class LSTM(nn.Module):
-    def __init__(self, input_dim=6, hidden_dim=1024, output_dim=60 * 2):
+    def __init__(self, input_dim=6, hidden_dim=2048, output_dim=60 * 2):
         super(LSTM, self).__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, data):
         x = data.x
-        x= x.reshape(-1, 50, 50, 6)  # (batch_size, num_agents, seq_len, input_dim)
+        x = x.reshape(-1, 50, 50, 6)  # (batch_size, num_agents, seq_len, input_dim)
         x = x[:, 0, :, :] # Only Consider ego agent index 0
 
         lstm_out, _ = self.lstm(x)

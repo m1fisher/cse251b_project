@@ -59,7 +59,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
     scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=20, gamma=0.25
+        optimizer, step_size=10, gamma=0.7
     )  # You can try different schedulers
 
     criterion = torch.nn.MSELoss()

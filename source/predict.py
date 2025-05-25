@@ -6,8 +6,8 @@ from torch.utils.data import DataLoader
 from torch_geometric.data import Data, Batch
 import torch
 
-from load_data import TrajectoryDatasetTest, load_test_data
-from models import LSTM
+from load_data import TrajectoryDatasetTest, load_test_data, load_train_data
+from models import LSTM, LinearForecast
 from train import get_device
 
 def load_model(initial_model, model_file, device):
@@ -17,16 +17,15 @@ def load_model(initial_model, model_file, device):
     initial_model.eval()
     return initial_model
 
-def predict_test_set(model, device):
-    test_data = load_test_data()
+def predict(model, device, data, output_name):
     scale = 7.0   # TODO: Make this a saved constant
-    test_dataset = TrajectoryDatasetTest(test_data, scale=scale)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False,
+    dataset = TrajectoryDatasetTest(data, scale=scale)
+    loader = DataLoader(dataset, batch_size=32, shuffle=False,
                              collate_fn=lambda xs: Batch.from_data_list(xs))
 
     pred_list = []
     with torch.no_grad():
-        for batch in test_loader:
+        for batch in loader:
             batch = batch.to(device)
             pred_norm = model(batch)
 
@@ -37,11 +36,14 @@ def predict_test_set(model, device):
     pred_output = pred_list.reshape(-1, 2)  # (N*60, 2)
     output_df = pd.DataFrame(pred_output, columns=['x', 'y'])
     output_df.index.name = 'index'
-    output_df.to_csv('submission.csv', index=True)
+    output_df.to_csv(output_name, index=True)
 
 
 if __name__ == "__main__":
+    test_data = load_test_data()
+    train_data = load_train_data()
     device = get_device()
     model_file = sys.argv[1]
+    outname = sys.argv[2]
     model = load_model(LSTM(), model_file, device)
-    predict_test_set(model, device)
+    predict(model, device, train_data, outname)

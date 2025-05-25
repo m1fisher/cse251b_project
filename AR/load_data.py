@@ -10,8 +10,13 @@ DATA_DIR = "src_data/"
 scale = 7.0
 
 def load_test_data(data_dir=DATA_DIR):
-    test_data  = np.load(os.path.join(DATA_DIR, 'test_input.npz'))['data']
+    test_data = np.load(os.path.join(DATA_DIR, 'test_input.npz'))['data']
     return test_data
+
+def load_train_data(data_dir=DATA_DIR):
+    train_data = np.load(os.path.join(DATA_DIR, 'train.npz'))['data']
+    train_data = train_data[:, :, :50, :]
+    return train_data
 
 def make_dataloaders(scale, data_dir, kfold=-1, full_train=False):
     train_data = np.load(os.path.join(data_dir, "train.npz"))['data']
@@ -46,15 +51,21 @@ def make_dataloaders(scale, data_dir, kfold=-1, full_train=False):
     for train_dataset, val_dataset in split:
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=32,
+            batch_size=128,
             shuffle=True,
             collate_fn=lambda x: Batch.from_data_list(x),
+            num_workers=os.cpu_count() // 2,
+            pin_memory=True,
+            persistent_workers=True,
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=32,
+            batch_size=128,
             shuffle=False,
             collate_fn=lambda x: Batch.from_data_list(x),
+            num_workers=os.cpu_count() // 2,
+            pin_memory=True,
+            persistent_workers=True,
         )
         datasets.append([train_dataloader, val_dataloader])
     return datasets

@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from load_data import DATA_DIR, make_dataloaders, scale
-from models import LSTM, LinearForecast, STGNNOneStep
+from models import LSTM, LinearForecast, STGNNOneStep, LSTMOneStep
 
 
 def get_device():
@@ -39,7 +39,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     elif model_cfg['name'] == 'LinearForecast':
         model = LinearForecast()
     elif model_cfg['name'] == 'AR_test':
-        model = STGNNOneStep()
+        model = LSTMOneStep()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -61,7 +61,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
     scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=20, gamma=0.25
+        optimizer, step_size=20, gamma=0.5
     )  # You can try different schedulers
 
     criterion = torch.nn.MSELoss()
@@ -74,10 +74,13 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         # ---- Training ----
         model.train()
         train_loss = 0
-        for batch in train_dataloader:
+        print(f"total batches: {len(train_dataloader)}")
+        for idx, batch in enumerate(train_dataloader):
+            if idx % 100 == 0:
+                print(f"batch {idx} done")
             batch = batch.to(device)
             pred = model(batch)
-            y = batch.y.view(batch.num_graphs, 60, 2)
+            y = batch.y.view(batch.num_graphs, 50, 6)
             loss = criterion(pred, y)
             optimizer.zero_grad()
             loss.backward()
@@ -104,18 +107,18 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 for batch in val_dataloader:
                     batch = batch.to(device)
                     pred = model(batch)
-                    y = batch.y.view(batch.num_graphs, 60, 2)
+                    y = batch.y.view(batch.num_graphs, 50, 6)
                     val_loss += criterion(pred, y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
 
                     # show MAE and MSE with unnormalized data
-                    pred = pred * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
-                    y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
-                    val_mae += torch.nn.L1Loss()(pred, y).item()
-                    val_mse += torch.nn.MSELoss()(pred, y).item()
+                    # pred = pred * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                    # y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                    # val_mae += torch.nn.L1Loss()(pred, y).item()
+                    # val_mse += torch.nn.MSELoss()(pred, y).item()
 
             val_loss /= len(val_dataloader)
-            val_mae /= len(val_dataloader)
-            val_mse /= len(val_dataloader)
+            # val_mae /= len(val_dataloader)
+            # val_mse /= len(val_dataloader)
             scheduler.step()
             # scheduler.step(val_loss)
             tqdm.tqdm.write(
@@ -139,6 +142,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
 
 
 if __name__ == "__main__":
+    torch.cuda.empty_cache()
     model_dir = sys.argv[1]
     with open(f'{model_dir}/model_cfg.yaml') as f:
         cfg = yaml.safe_load(f)

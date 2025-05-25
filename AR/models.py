@@ -195,3 +195,27 @@ class STGNNOneStep(nn.Module):
         y = self.head[2](y).squeeze(-1)                # (B*A, 6)
         y = y.view(B, self.A, 6)                       # (B, 50, 6)
         return y
+
+class LSTMOneStep(nn.Module):
+    def __init__(self, input_dim=300, hidden_dim=1400, output_dim=50 * 6):
+        super(LSTMOneStep, self).__init__()
+        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+        self.fc = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, data):
+        x = data.x.view(data.num_graphs, 50, 50, 6)  # (batch_size, num_agents, seq_len, input_dim)
+        x = x.transpose(1, 2).contiguous()
+        x = x.view(data.num_graphs, 50, 50 * 6)
+
+        lstm_out, _ = self.lstm(x)
+        # lstm_out is of shape (batch_size, seq_len, hidden_dim) and we want the last time step output
+        out = self.fc(lstm_out[:, -1, :])
+        return out.view(data.num_graphs, 50, 6)
+
+if __name__ == "__main__":
+    model = LSTM()
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total trainable parameters: {total_params:,}")
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"{name:40}  {param.numel():>10,}")

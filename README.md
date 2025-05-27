@@ -38,11 +38,11 @@ high loss scenes.
 2. Single-step auto-regressive LSTM: breaks the training sequence into 60 independent steps, the model takes in all agents'
 data of the first 50 timestep and predict all agents' data in the next one.
    1. Does not work in the current state
-   2. It is quite evident that some of attention weights need to be given to the other agents, otherwise, the model 
-   cannot interpret the relationship between the ego and the other agents. I tried running the benchmark with all agents'
+   2. It is quite evident that some form of attention weights need to be given to the other agents, otherwise, the model 
+   cannot interpret the relationship between the ego and each of the other agents. I tried running the benchmark with all agents'
    data as input, and the prediction is just horrible. Without an attention-like weight, the model assumes the same relationship
-   between the ego and the first agent, the ego with the second agent, etc. This is also not fixed even if we pre-sort the
-   agents' order based on proximity to the ego; I think the relationship is just too complex.
+   between the ego and the first agent, the ego with the second agent, etc. Simple solution, such as pre-sorting the
+   agents' order based on proximity to the ego, does not work. I think the relationship is just too complex.
 3. SocialGAT networked-based encoding: this model first encodes each agent, and then it feeds all agents into a socialGAT network, and lastly it runs through an LSTM
    1. The SocialGAT acts as a form of attention-weight learning between the ego and the other agents
    2. This was suggested by chatgpt and then modified. It kind of works when the model is at the current depth. 
@@ -51,3 +51,5 @@ data of the first 50 timestep and predict all agents' data in the next one.
    in train.py will decrease VRAM usage linearly. This implementation effectively makes batch-size defined in the load_data.py
    more like a mini-batch size. It independently loads ACC_STEPS of mini-batches per batch, while only using VRAM size of the 
    minibatch. The real batch size = mini-batch size * ACC_STEPS
+   4. I think this model has potential of working. Some development idea includes better encoding and modifying how the socialGAT
+   is handling and associating the different timesteps' data.

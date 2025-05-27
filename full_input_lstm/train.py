@@ -61,9 +61,20 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     else:
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=10, gamma=0.7
-    )  # You can try different schedulers
+    ## warmup LR to reduce dead ReLU
+    warm_epochs = 3
+    warmup = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
+    )
+    main_sched = torch.optim.lr_scheduler.ConstantLR(
+        optimizer, factor=1.0, total_iters=epochs - warm_epochs
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer, schedulers=[warmup, main_sched], milestones=[warm_epochs]
+    )
+    # scheduler = torch.optim.lr_scheduler.StepLR(
+    #     optimizer, step_size=10, gamma=0.7
+    # )  # You can try different schedulers
 
     criterion = torch.nn.MSELoss()
 

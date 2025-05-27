@@ -32,9 +32,10 @@ LSTM_HIDDEN   = 256      # hidden units in temporal LSTM
 class AgentEncoder(nn.Module):
     def __init__(self, in_dim=D_IN, hidden=D_MODEL):
         super().__init__()
+        ## layer norm added to reduce dead ReLU problem
         self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden), nn.ReLU(),
-            nn.Linear(hidden, hidden), nn.ReLU(),
+            nn.Linear(in_dim, hidden), nn.ReLU(), nn.LayerNorm(D_MODEL),
+            nn.Linear(hidden, hidden), nn.ReLU(), nn.LayerNorm(D_MODEL)
         )
 
     def forward(self, x):

@@ -18,8 +18,8 @@ def load_train_data(data_dir=DATA_DIR):
     train_data = train_data[:, :, :50, :]
     return train_data
 
-def make_dataloaders(scale, data_dir, kfold=-1, full_train=False):
-    train_data = np.load(os.path.join(data_dir, "train.npz"))['data']
+def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
+    train_data = np.load(data_file)['data']
     N = len(train_data)
     split = []
     if kfold == -1:

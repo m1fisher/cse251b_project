@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from load_data import DATA_DIR, make_dataloaders, scale
-from models import LSTM, LinearForecast
+from models import LSTM, LinearForecast, multilayer_LSTM
 
 
 def get_device():
@@ -38,6 +38,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         model = LSTM()
     elif model_cfg['name'] == 'LinearForecast':
         model = LinearForecast()
+    elif model_cfg['name'] == 'multilayer_lstm':
+        model = multilayer_LSTM()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -121,6 +123,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                  f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
             )
             fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\t{val_loss:8.4f}\t{val_mae:8.4f}\t{val_mse:8.4f}\n")
+            torch.save(model.state_dict(), f"{out_dir}/current_model.pt")
             if val_loss < best_val_loss - 1e-3:
                 best_val_loss = val_loss
                 no_improvement = 0
@@ -144,7 +147,8 @@ if __name__ == "__main__":
     if cfg['kfolds'] == -1:
         print('Not running kfolds')
         cfg['k_id'] = ''
-        t_dataloader, v_dataloader = make_dataloaders(scale, DATA_DIR)[0]  # default is to output one set of loaders
+        dataf = '/home/zhaoyang-new/School_Work/cse251b_project/AR/src_data/train.npz'
+        t_dataloader, v_dataloader = make_dataloaders(scale, dataf)[0]  # default is to output one set of loaders
         run_training(cfg, model_dir, t_dataloader, v_dataloader)
     else:
         dataloaders = make_dataloaders(scale, DATA_DIR, kfold=cfg['kfolds'])

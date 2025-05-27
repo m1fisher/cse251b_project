@@ -7,7 +7,7 @@ from torch_geometric.data import Data, Batch
 import torch
 
 from load_data import TrajectoryDatasetTest, load_test_data, load_train_data
-from models import LSTM, LinearForecast
+from models import LSTM, LinearForecast, multilayer_LSTM
 from train import get_device
 
 def load_model(initial_model, model_file, device):
@@ -45,5 +45,5 @@ if __name__ == "__main__":
     device = get_device()
     model_file = sys.argv[1]
     outname = sys.argv[2]
-    model = load_model(LSTM(), model_file, device)
-    predict(model, device, train_data, outname)
+    model = load_model(multilayer_LSTM(), model_file, device)
+    predict(model, device, test_data, outname)

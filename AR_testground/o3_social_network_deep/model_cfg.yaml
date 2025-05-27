@@ -1,0 +1,14 @@
+model:
+  name: SN
+optimizer:
+  beta1: 0.85
+  beta2: 0.999
+  lr: 0.001
+  name: adam
+  weight_decay: 0.00001
+training:
+  epochs: 500
+  patience: 500
+  seed: 42
+kfolds: -1
+dataf: /home/zhaoyang-new/School_Work/cse251b_project/full_input_lstm/src_data/train.npz

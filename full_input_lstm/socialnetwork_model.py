@@ -56,6 +56,7 @@ class SocialGAT(nn.Module):
         super().__init__()
         self.gat = GATConv(hidden, hidden // heads, heads=heads, add_self_loops=False)
         # Pre‑compute fully‑connected edge_index once (minus self‑loops)
+        # TODO: Consider graph 1 x 50, ego to all other agents
         src, dst = torch.meshgrid(torch.arange(N_AGENTS), torch.arange(N_AGENTS), indexing="ij")
         mask = src != dst
         self.register_buffer("edge_index", torch.stack([src[mask], dst[mask]], dim=0))  # (2, A*(A-1))
@@ -109,6 +110,7 @@ class SocialLSTMPredictor(nn.Module):
     """AgentEncoder ➜ Social GAT ➜ Ego LSTM ➜ 60‑step (x,y) forecast"""
     def __init__(self):
         super().__init__()
+        # TODO: Make sure this encoder layer is useful; could try without it
         self.encoder = AgentEncoder()
         self.social = nn.Sequential(
             SocialGAT(),  # first GAT layer
@@ -151,6 +153,9 @@ class SocialLSTMPredictor(nn.Module):
         h = self.social(h)                              # same shape
 
         # 3) Extract ego (agent 0) sequence and feed to temporal LSTM
+        # TODO: Check dimensionality and make sure that all necessary information
+        # is getting passed here.
+        # TRY passing all of h?
         ego_seq = h[:, 0]                               # (B, T, D_MODEL)
         return self.temporal(ego_seq)                   # (B, 60, 2)
 

@@ -15,7 +15,8 @@ Author: ChatGPT (o3)
 # ------------------------------------------------------------
 import torch
 import torch.nn as nn
-from torch_geometric.nn import GATConv                       # pip install torch_geometric
+from torch_geometric.nn import GATConv
+import torch.utils.checkpoint as cp
 
 # Model hyper‑parameters (feel free to tweak)
 D_IN          = 6        # x, y, vx, vy, heading, type
@@ -23,8 +24,9 @@ D_MODEL       = 128      # embedding size after AgentEncoder
 N_AGENTS      = 50       # including the ego at index 0
 SEQ_LEN       = 50       # number of past timesteps fed in
 HORIZON       = 60       # forecast length (x,y) pairs
-GAT_HEADS     = 4        # multi‑head attention
-LSTM_HIDDEN   = 256      # hidden units in temporal LSTM
+GAT_HEADS     = 8        # multi‑head attention
+LSTM_HIDDEN   = 1024     # hidden units in temporal LSTM
+LSTM_LAYERS   = 3
 
 # ------------------------------------------------------------
 # 1) AgentEncoder – small shared MLP (6 ➜ 128)
@@ -34,8 +36,9 @@ class AgentEncoder(nn.Module):
         super().__init__()
         ## layer norm added to reduce dead ReLU problem
         self.net = nn.Sequential(
-            nn.Linear(in_dim, hidden), nn.ReLU(), nn.LayerNorm(D_MODEL),
-            nn.Linear(hidden, hidden), nn.ReLU(), nn.LayerNorm(D_MODEL)
+            nn.Linear(in_dim, hidden), nn.ReLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.ReLU(), nn.LayerNorm(hidden),
+            nn.Linear(hidden, hidden), nn.ReLU(), nn.LayerNorm(hidden)
         )
 
     def forward(self, x):
@@ -80,14 +83,23 @@ class SocialGAT(nn.Module):
 class EgoLSTM(nn.Module):
     def __init__(self, hidden=D_MODEL, lstm_hidden=LSTM_HIDDEN):
         super().__init__()
-        self.lstm = nn.LSTM(hidden, lstm_hidden, num_layers=2, batch_first=True)
+        self.lstm = nn.LSTM(hidden, lstm_hidden, num_layers=LSTM_LAYERS, batch_first=True)
         self.head = nn.Linear(lstm_hidden, HORIZON * 2)
 
     def forward(self, ego_seq):
-        """ego_seq: (B, SEQ_LEN, D_MODEL)"""
-        out, _ = self.lstm(ego_seq)                      # (B, T, H)
-        last = out[:, -1, :]                             # use last hidden state
-        pred = self.head(last)                           # (B, 120)
+        """
+        ego_seq: (B, SEQ_LEN, D_MODEL)
+        Using Checkpoint to prevent saving of some intermediate activations -> reduced runtime but reduced VRAM overhead
+        """
+        # ego_seq : (B, 50, D)
+        def lstm_forward(seq):
+            out, _ = self.lstm(seq)
+            return out
+        # 1) run forward with checkpointing
+        out = cp.checkpoint(lstm_forward, ego_seq, use_reentrant=False)  # heavy part we checkpoint
+        # 2) same head as before
+        last = out[:, -1, :]
+        pred = self.head(last)
         return pred.view(-1, HORIZON, 2)                # (B, 60, 2)
 
 # ------------------------------------------------------------
@@ -98,7 +110,11 @@ class SocialLSTMPredictor(nn.Module):
     def __init__(self):
         super().__init__()
         self.encoder = AgentEncoder()
-        self.social  = SocialGAT()
+        self.social = nn.Sequential(
+            SocialGAT(),  # first GAT layer
+            nn.ReLU(),  # non‑linearity between GATs
+            SocialGAT()  # second GAT layer
+        )
         self.temporal = EgoLSTM()
 
     def forward(self, data):

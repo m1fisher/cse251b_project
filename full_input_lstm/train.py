@@ -66,8 +66,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     warmup = torch.optim.lr_scheduler.LinearLR(
         optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
     )
-    main_sched = torch.optim.lr_scheduler.ConstantLR(
-        optimizer, factor=1.0, total_iters=epochs - warm_epochs
+    main_sched = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=10, gamma=0.7
     )
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup, main_sched], milestones=[warm_epochs]
@@ -78,6 +78,9 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
 
     criterion = torch.nn.MSELoss()
 
+    scaler = torch.amp.GradScaler('cuda')  # allows mixed precision for reduced VRAM usage
+    ACC_STEPS = 3  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
+
     fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
     best_val_loss = float("inf")
@@ -85,17 +88,25 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
         # ---- Training ----
         model.train()
-        train_loss = 0
-        for batch in train_dataloader:
+        train_loss = 0.0
+        for step, batch in enumerate(train_dataloader):
             batch = batch.to(device)
-            pred = model(batch)
-            y = batch.y.view(batch.num_graphs, 60, 2)
-            loss = criterion(pred[..., :2], y)  # for models that output all 6-dim, evaluate the loss on only the (x,y)
+            with torch.amp.autocast('cuda'):  # AMP casting
+                pred = model(batch)
+                y = batch.y.view(batch.num_graphs, 60, 2)
+                loss = criterion(pred[..., :2], y) / ACC_STEPS   # scale down
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-            optimizer.step()
-            train_loss += loss.item()
+            scaler.scale(loss).backward()
+
+            # (optional) gradient clip – scale **before** unscaling
+            if (step + 1) % ACC_STEPS == 0 or (step + 1) == len(train_dataloader):
+                scaler.unscale_(optimizer)  # make real values
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
+            train_loss += loss.item() * ACC_STEPS                # undo scaling
         train_loss /= len(train_dataloader)
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:

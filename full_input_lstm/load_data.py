@@ -51,13 +51,13 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     for train_dataset, val_dataset in split:
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=32,
+            batch_size=24,
             shuffle=True,
             collate_fn=lambda x: Batch.from_data_list(x),
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=32,
+            batch_size=24,
             shuffle=False,
             collate_fn=lambda x: Batch.from_data_list(x),
         )

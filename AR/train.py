@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 
 from load_data import DATA_DIR, make_dataloaders, scale
-from models import LSTM, LinearForecast, STGNNOneStep, LSTMOneStep
+from models import LSTM, LinearForecast, LSTMOneStep
 
 
 def get_device():
@@ -126,6 +126,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                  f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")
             )
             fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\t{val_loss:8.4f}\t{val_mae:8.4f}\t{val_mse:8.4f}\n")
+            torch.save(model.state_dict(), f"{out_dir}/current_model.pt")
             if val_loss < best_val_loss - 1e-3:
                 best_val_loss = val_loss
                 no_improvement = 0

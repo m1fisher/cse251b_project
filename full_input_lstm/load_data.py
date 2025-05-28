@@ -29,8 +29,9 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         else:
             val_size = 0
         train_size = N - val_size
+        # TODO: re-enable augmentation
         train_dataset = TrajectoryDatasetTrain(
-            train_data[:train_size], scale=SCALE, augment=True
+            train_data[:train_size], scale=SCALE, augment=False
         )
         val_dataset = TrajectoryDatasetTrain(
             train_data[train_size:], scale=SCALE, augment=False
@@ -40,7 +41,7 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         kf = KFold(n_splits=kfold, shuffle=True)
         for train_idx, val_idx in kf.split(train_data):
             train_dataset = TrajectoryDatasetTrain(
-                train_data[train_idx], scale=SCALE, augment=True
+                train_data[train_idx], scale=SCALE, augment=False
             )
             val_dataset = TrajectoryDatasetTrain(
                 train_data[val_idx], scale=SCALE, augment=False
@@ -51,13 +52,13 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     for train_dataset, val_dataset in split:
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=24,
+            batch_size=48,
             shuffle=True,
             collate_fn=lambda x: Batch.from_data_list(x),
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=24,
+            batch_size=48,
             shuffle=False,
             collate_fn=lambda x: Batch.from_data_list(x),
         )
@@ -77,18 +78,22 @@ class TrajectoryDatasetTrain(Dataset):
         self.augment = augment
 
     def __len__(self):
-        return len(self.data)
+        return len(self.data) * 60
 
     def __getitem__(self, idx):
-        scene = self.data[idx]
-        # Getting 50 historical timestamps and 60 future timestamps
-        hist = scene[:, :50, :].copy()  # (agents=50, time_seq=50, 6)
-        future = torch.tensor(scene[0, 50:, :2].copy(), dtype=torch.float32)  # (60, 2)
+        scene_idx = idx // 60
+        time_idx = idx % 60
+        scene = self.data[scene_idx]
+        # Getting 50 historical timestamps and 1 future timestamps
+        hist = scene[:, time_idx:time_idx+50, :].copy()  # (agents=50, time_seq=50, 6)
+        future = torch.tensor(scene[:, time_idx+1].copy(), dtype=torch.float32)  # (60, 2)
 
         def wrap(a):
             """Map angle to (-π, π]."""
             return (a + np.pi) % (2 * np.pi) - np.pi
 
+        # TODO: Make sure that data augmentation is correct,
+        # consider shifting by some distance.
         # Data augmentation(only for training)
         if self.augment:
             if np.random.rand() < 0.5:
@@ -111,7 +116,7 @@ class TrajectoryDatasetTrain(Dataset):
         # Use the last timeframe of the historical trajectory as the origin
         origin = hist[0, 49, :2].copy()  # (2,)
         hist[..., :2] = hist[..., :2] - origin
-        future = future - origin
+        future[..., :2] = future[..., :2] - origin
 
         # Normalize the historical trajectory and future trajectory
         hist[..., :4] = hist[..., :4] / self.scale

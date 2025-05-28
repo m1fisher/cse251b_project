@@ -25,7 +25,7 @@ N_AGENTS      = 50       # including the ego at index 0
 SEQ_LEN       = 50       # number of past timesteps fed in
 HORIZON       = 60       # forecast length (x,y) pairs
 GAT_HEADS     = 8        # multi‑head attention
-LSTM_HIDDEN   = 1024     # hidden units in temporal LSTM
+LSTM_HIDDEN   = 256     # hidden units in temporal LSTM
 LSTM_LAYERS   = 3
 
 # ------------------------------------------------------------
@@ -56,13 +56,14 @@ class SocialGAT(nn.Module):
         super().__init__()
         self.gat = GATConv(hidden, hidden // heads, heads=heads, add_self_loops=False)
         # Pre‑compute fully‑connected edge_index once (minus self‑loops)
-        # TODO: Consider graph 1 x 50, ego to all other agents
-        src, dst = torch.meshgrid(torch.arange(N_AGENTS), torch.arange(N_AGENTS), indexing="ij")
+        src, dst = torch.meshgrid(torch.arange(1), torch.arange(N_AGENTS), indexing="ij")
         mask = src != dst
-        self.register_buffer("edge_index", torch.stack([src[mask], dst[mask]], dim=0))  # (2, A*(A-1))
+        self.register_buffer("edge_index", torch.stack([src[mask], dst[mask]], dim=0))  # (2, A)
+
 
     def forward(self, h):
         """h shape: (B, A, T, D_MODEL)"""
+        # TODO: step-through
         B, A, T, D = h.shape
         h = h.permute(0, 2, 1, 3).contiguous()           # (B, T, A, D)
         h = h.reshape(B * T, A, D)                       # merge batch & time
@@ -116,7 +117,8 @@ class SocialLSTMPredictor(nn.Module):
             SocialGAT(),  # first GAT layer
             nn.ReLU(),  # non‑linearity between GATs
             SocialGAT()  # second GAT layer
-        )
+           )
+        #self.social = SocialGAT()
         self.temporal = EgoLSTM()
 
     def forward(self, data):

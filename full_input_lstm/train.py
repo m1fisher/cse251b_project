@@ -10,7 +10,7 @@ import yaml
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
-
+from transformer import CrossAgentTransformerPredictor
 
 def get_device():
     # Set device for training speedup
@@ -41,6 +41,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         model = LinearForecast()
     elif model_cfg['name'] == 'SN':
         model = SocialLSTMPredictor()
+    elif model_cfg['name'] == 'Transformer':
+        model = CrossAgentTransformerPredictor(num_features=6)
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -78,35 +80,38 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
 
     criterion = torch.nn.MSELoss()
 
-    scaler = torch.amp.GradScaler('cuda')  # allows mixed precision for reduced VRAM usage
+    #scaler = torch.amp.GradScaler()  # allows mixed precision for reduced VRAM usage
     ACC_STEPS = 3  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
 
     fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
     best_val_loss = float("inf")
     no_improvement = 0
-    for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
+    running_loss = 0
+    z = 0
+    #for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
+    for epoch in range(epochs):
         # ---- Training ----
         model.train()
         train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
+        print(len(train_dataloader))
+        optimizer.zero_grad()
+        z = 0
+        for step, batch in enumerate(tqdm.tqdm(train_dataloader, desc="Batches", unit="batch"), start=0):
             batch = batch.to(device)
-            with torch.amp.autocast('cuda'):  # AMP casting
-                pred = model(batch)
-                y = batch.y.view(batch.num_graphs, 60, 2)
-                loss = criterion(pred[..., :2], y) / ACC_STEPS   # scale down
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-
+            pred = model(batch)
+            y = batch.y.view(batch.num_graphs, 50, 6)
+            loss = criterion(pred, y) / ACC_STEPS   # scale down
+            loss.backward()
             # (optional) gradient clip – scale **before** unscaling
             if (step + 1) % ACC_STEPS == 0 or (step + 1) == len(train_dataloader):
-                scaler.unscale_(optimizer)  # make real values
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
-
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
+            z += 1
+            #print(train_loss / z)
+
         train_loss /= len(train_dataloader)
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:
@@ -118,6 +123,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             )
             fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\n")
         else:
+            import pdb; pdb.set_trace()
+
             # ---- Validation ----
             model.eval()
             val_loss = 0
@@ -163,7 +170,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
 
 
 if __name__ == "__main__":
-    torch.cuda.empty_cache()
+    #torch.cuda.empty_cache()
     model_dir = sys.argv[1]
     with open(f'{model_dir}/model_cfg.yaml') as f:
         cfg = yaml.safe_load(f)

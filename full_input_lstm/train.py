@@ -110,6 +110,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
+            if z > 1000:
+                break
             #print(train_loss / z)
 
         train_loss /= len(train_dataloader)
@@ -123,17 +125,23 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             )
             fp_write.write(f"{epoch:03d}\t{optimizer.param_groups[0]['lr']:.6f}\t{train_loss:8.4f}\n")
         else:
-            import pdb; pdb.set_trace()
-
             # ---- Validation ----
             model.eval()
             val_loss = 0
             val_mae = 0
             val_mse = 0
             with torch.no_grad():
-                for batch in val_dataloader:
+                for batch in tqdm.tqdm(val_dataloader):
                     batch = batch.to(device)
-                    pred = model(batch)
+                    x = batch.x.view(batch.num_graphs, 50, 50, 6)
+                    preds = []
+                    for i in range(60):
+                        pred = model(x)
+                        preds.append(pred[:, 0, :])
+                        # concat
+                        pred = pred.unsqueeze(2)
+                        x = torch.cat([x, pred], dim=2)[:, :, 1:]
+                    pred = torch.stack(preds, dim=1)
                     y = batch.y.view(batch.num_graphs, 60, 2)
                     val_loss += criterion(pred[..., :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
 

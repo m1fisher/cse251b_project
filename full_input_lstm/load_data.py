@@ -33,8 +33,8 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         train_dataset = TrajectoryDatasetTrain(
             train_data[:train_size], scale=SCALE, augment=False
         )
-        val_dataset = TrajectoryDatasetTrain(
-            train_data[train_size:], scale=SCALE, augment=False
+        val_dataset = TrajectoryDatasetValidate(
+            train_data[train_size:], scale=SCALE
         )
         split.append([train_dataset, val_dataset])
     else:
@@ -43,8 +43,8 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
             train_dataset = TrajectoryDatasetTrain(
                 train_data[train_idx], scale=SCALE, augment=False
             )
-            val_dataset = TrajectoryDatasetTrain(
-                train_data[val_idx], scale=SCALE, augment=False
+            val_dataset = TrajectoryDatasetValidate(
+                train_data[val_idx], scale=SCALE
             )
             split.append([train_dataset, val_dataset])
 
@@ -117,6 +117,47 @@ class TrajectoryDatasetTrain(Dataset):
         origin = hist[0, 49, :2].copy()  # (2,)
         hist[..., :2] = hist[..., :2] - origin
         future[..., :2] = future[..., :2] - origin
+
+        # Normalize the historical trajectory and future trajectory
+        hist[..., :4] = hist[..., :4] / self.scale
+        future = future / self.scale
+
+        data_item = Data(
+            x=torch.tensor(hist, dtype=torch.float32),
+            y=future.type(torch.float32),
+            origin=torch.tensor(origin, dtype=torch.float32).unsqueeze(0),
+            scale=torch.tensor(self.scale, dtype=torch.float32),
+        )
+
+        return data_item
+
+class TrajectoryDatasetValidate(Dataset):
+    def __init__(self, data, scale):
+        """
+        data: Shape (N, 50, 110, 6) Training data
+        scale: Scale for normalization (suggested to use 10.0 for Argoverse 2 data)
+        augment: Whether to apply data augmentation (only for training)
+        """
+        self.data = data
+        self.scale = SCALE
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        scene = self.data[idx]
+        # Getting 50 historical timestamps and 60 future timestamps
+        hist = scene[:, :50, :].copy()  # (agents=50, time_seq=50, 6)
+        future = torch.tensor(scene[0, 50:, :2].copy(), dtype=torch.float32)  # (60, 2)
+
+        def wrap(a):
+            """Map angle to (-π, π]."""
+            return (a + np.pi) % (2 * np.pi) - np.pi
+
+        # Use the last timeframe of the historical trajectory as the origin
+        origin = hist[0, 49, :2].copy()  # (2,)
+        hist[..., :2] = hist[..., :2] - origin
+        future = future - origin
 
         # Normalize the historical trajectory and future trajectory
         hist[..., :4] = hist[..., :4] / self.scale

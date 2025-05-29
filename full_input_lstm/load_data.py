@@ -31,12 +31,11 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         else:
             val_size = 0
         train_size = N - val_size
-        # TODO: re-enable augmentation
         train_dataset = TrajectoryDatasetTrain(
-            train_data[:train_size], scale=SCALE, augment=False
+            train_data[:train_size], scale=SCALE, augment=True
         )
         val_dataset = TrajectoryDatasetValidate(
-            train_data[train_size:], scale=SCALE
+            train_data[train_size:], scale=SCALE,
         )
         split.append([train_dataset, val_dataset])
     else:
@@ -80,11 +79,14 @@ class TrajectoryDatasetTrain(Dataset):
         self.augment = augment
 
     def __len__(self):
-        return len(self.data) * 60
+        return len(self.data) # * 60
 
     def __getitem__(self, idx):
         scene_idx = idx // 60
         time_idx = min(idx % 60, 60 - FUTURE_STEPS)
+        # temp
+        scene_idx = idx
+        time_idx = 0
         scene = self.data[scene_idx]
         # Getting 50 historical timestamps and future timestamps
         hist = scene[:, time_idx:time_idx+50, :].copy()  # (agents=50, time_seq=50, 6)
@@ -106,15 +108,16 @@ class TrajectoryDatasetTrain(Dataset):
                     dtype=np.float32,
                 )
                 # Rotate the historical trajectory and future trajectory
-                hist[..., :2] = hist[..., :2] @ R
-                hist[..., 2:4] = hist[..., 2:4] @ R
-                hist[..., 4] = wrap(hist[..., 4] + theta)
-                future = future @ R
+                for x in (hist, future):
+                    x[..., :2] = x[..., :2] @ R
+                    x[..., 2:4] = x[..., 2:4] @ R
+                    x[..., 4] = wrap(x[..., 4] + theta)
             if np.random.rand() < 0.5:
-                hist[..., 0] *= -1
-                hist[..., 2] *= -1
-                hist[..., 4] = wrap(np.pi - hist[..., 4])
-                future[:, 0] *= -1
+                for x in (hist, future):
+                    x[..., 0] *= -1
+                    x[..., 2] *= -1
+                    x[..., 4] = wrap(np.pi - x[..., 4])
+                #future[:, 0] *= -1
 
         # Use the last timeframe of the historical trajectory as the origin
         origin = hist[0, 49, :2].copy()  # (2,)

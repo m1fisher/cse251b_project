@@ -104,8 +104,6 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
             # For now, only evaluate loss on (x, y) position of hero agent
-            # try RMSE
-
             loss = criterion(pred[:, 0, :, :2], y[:, 0, :, :2]) / ACC_STEPS   # scale down
 
             #loss = criterion(pred[..., :2], y[..., :2]) / (ACC_STEPS  )   # scale down
@@ -117,7 +115,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
-            if z > 5000:
+            if z > 1000:
                 break
             #print(train_loss / z)
 
@@ -144,14 +142,13 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                         break
                     batch = batch.to(device)
                     x = batch.x.view(batch.num_graphs, 50, 50, 6)
-                    preds = []
-                    for i in range(60):
-                        pred = model(x)
-                        preds.append(pred[:, :, 0, :])
-                        # concat
-#                        pred = pred.unsqueeze(2)
-                        x = torch.cat([x, pred], dim=2)[:, :, 1:]
-                    pred = torch.stack(preds, dim=2)
+                    pred = model(x)
+#                    preds = []
+#                    for i in range(60):
+#                        pred = model(x)
+#                        preds.append(pred[:, :, 0, :])
+#                        x = torch.cat([x, pred], dim=2)[:, :, 1:]
+#                    pred = torch.stack(preds, dim=2)
                     y = batch.y.view(batch.num_graphs, 60, 2)
 
                     val_loss += criterion(pred[:, 0, :, :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)

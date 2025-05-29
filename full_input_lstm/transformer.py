@@ -87,8 +87,8 @@ class CrossAgentTransformerPredictor(nn.Module):
         # 3) forecasting from last time-step
         last = h[:, :, -1, :]             # → (B, A, d_model)
         fut  = self.forecast(last)        # → (B, A, future_steps*output_dim)
-        #fut  = fut.view(B, A, self.future_steps, self.output_dim)
-        fut  = fut.view(B, A, self.output_dim)
+        fut  = fut.view(B, A, self.future_steps, self.output_dim)
+        #fut  = fut.view(B, A, self.output_dim)
         return fut
 
 class AutoRegressiveMLP(nn.Module):

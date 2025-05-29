@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Data, Batch
 from sklearn.model_selection import KFold
 
+from constants import FUTURE_STEPS
+
 DATA_DIR = "src_data/"
 SCALE = 7.0
 
@@ -52,13 +54,13 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     for train_dataset, val_dataset in split:
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=48,
+            batch_size=24,
             shuffle=True,
             collate_fn=lambda x: Batch.from_data_list(x),
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=48,
+            batch_size=24,
             shuffle=False,
             collate_fn=lambda x: Batch.from_data_list(x),
         )
@@ -82,11 +84,12 @@ class TrajectoryDatasetTrain(Dataset):
 
     def __getitem__(self, idx):
         scene_idx = idx // 60
-        time_idx = idx % 60
+        time_idx = min(idx % 60, 60 - FUTURE_STEPS)
         scene = self.data[scene_idx]
-        # Getting 50 historical timestamps and 1 future timestamps
+        # Getting 50 historical timestamps and future timestamps
         hist = scene[:, time_idx:time_idx+50, :].copy()  # (agents=50, time_seq=50, 6)
-        future = torch.tensor(scene[:, time_idx+1].copy(), dtype=torch.float32)  # (60, 2)
+        #future = torch.tensor(scene[:, (time_idx+50+FUTURE_STEPS - 1)].copy(), dtype=torch.float32)  # (60, 2)
+        future = scene[:, time_idx+50:(time_idx+50+FUTURE_STEPS)].copy()  # (60, 2)
 
         def wrap(a):
             """Map angle to (-π, π]."""
@@ -124,7 +127,7 @@ class TrajectoryDatasetTrain(Dataset):
 
         data_item = Data(
             x=torch.tensor(hist, dtype=torch.float32),
-            y=future.type(torch.float32),
+            y=torch.tensor(future, dtype=torch.float32),
             origin=torch.tensor(origin, dtype=torch.float32).unsqueeze(0),
             scale=torch.tensor(self.scale, dtype=torch.float32),
         )

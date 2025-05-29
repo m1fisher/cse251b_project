@@ -7,10 +7,11 @@ import tqdm
 from pathlib import Path
 import yaml
 
+from constants import FUTURE_STEPS
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
-from transformer import CrossAgentTransformerPredictor
+from transformer import CrossAgentTransformerPredictor, AutoRegressiveMLP
 
 def get_device():
     # Set device for training speedup
@@ -42,7 +43,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     elif model_cfg['name'] == 'SN':
         model = SocialLSTMPredictor()
     elif model_cfg['name'] == 'Transformer':
-        model = CrossAgentTransformerPredictor(num_features=6)
+        #model = CrossAgentTransformerPredictor(num_features=6)
+        model = AutoRegressiveMLP(num_features=6)
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -94,14 +96,19 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         # ---- Training ----
         model.train()
         train_loss = 0.0
-        print(len(train_dataloader))
         optimizer.zero_grad()
         z = 0
+        train_loss = 0
         for step, batch in enumerate(tqdm.tqdm(train_dataloader, desc="Batches", unit="batch"), start=0):
             batch = batch.to(device)
             pred = model(batch)
-            y = batch.y.view(batch.num_graphs, 50, 6)
-            loss = criterion(pred, y) / ACC_STEPS   # scale down
+            y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
+            # For now, only evaluate loss on (x, y) position of hero agent
+            # try RMSE
+
+            loss = criterion(pred[:, 0, :, :2], y[:, 0, :, :2]) / ACC_STEPS   # scale down
+
+            #loss = criterion(pred[..., :2], y[..., :2]) / (ACC_STEPS  )   # scale down
             loss.backward()
             # (optional) gradient clip – scale **before** unscaling
             if (step + 1) % ACC_STEPS == 0 or (step + 1) == len(train_dataloader):
@@ -110,11 +117,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
-            if z > 1000:
+            if z > 5000:
                 break
             #print(train_loss / z)
 
-        train_loss /= len(train_dataloader)
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:
             ## skipping validation as no validation dataset passed in
@@ -131,29 +137,37 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             val_mae = 0
             val_mse = 0
             with torch.no_grad():
+                i = 0
                 for batch in tqdm.tqdm(val_dataloader):
+                    i += 1
+                    if i > 100:
+                        break
                     batch = batch.to(device)
                     x = batch.x.view(batch.num_graphs, 50, 50, 6)
                     preds = []
                     for i in range(60):
                         pred = model(x)
-                        preds.append(pred[:, 0, :])
+                        preds.append(pred[:, :, 0, :])
                         # concat
-                        pred = pred.unsqueeze(2)
+#                        pred = pred.unsqueeze(2)
                         x = torch.cat([x, pred], dim=2)[:, :, 1:]
-                    pred = torch.stack(preds, dim=1)
+                    pred = torch.stack(preds, dim=2)
                     y = batch.y.view(batch.num_graphs, 60, 2)
-                    val_loss += criterion(pred[..., :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
+
+                    val_loss += criterion(pred[:, 0, :, :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
 
                     # show MAE and MSE with unnormalized data
-                    pred = pred[..., :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
+                    pred = pred[:, 0, :, :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
                     y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
                     val_mae += torch.nn.L1Loss()(pred, y).item()
                     val_mse += torch.nn.MSELoss()(pred, y).item()
-
-            val_loss /= len(val_dataloader)
-            val_mae /= len(val_dataloader)
-            val_mse /= len(val_dataloader)
+#
+#            val_loss /= len(val_dataloader)
+#            val_mae /= len(val_dataloader)
+#            val_mse /= len(val_dataloader)
+            val_loss /= i
+            val_mae /= i
+            val_mse /= i
             scheduler.step()
             # scheduler.step(val_loss)
             tqdm.tqdm.write(

@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import math
 
+from constants import FUTURE_STEPS
+
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding, as in Vaswani et al."""
     def __init__(self, d_model, max_len=5000):
@@ -32,7 +34,7 @@ class CrossAgentTransformerPredictor(nn.Module):
                  num_layers: int = 2,
                  dim_feedforward: int = 128,
                  dropout: float = 0.1,
-                 future_steps: int = 1,
+                 future_steps: int = FUTURE_STEPS,
                  output_dim: int = None):
         super().__init__()
         self.output_dim = output_dim or num_features
@@ -94,7 +96,7 @@ class AutoRegressiveMLP(nn.Module):
                  num_features: int,
                  hidden_dim: int = 64,
                  output_dim: int = None,
-                 future_steps: int = 1):
+                 future_steps: int = FUTURE_STEPS):
         """
         :param num_features: number of input features per timestep (F)
         :param hidden_dim:   dimensionality of the MLP’s hidden layers

@@ -11,7 +11,7 @@ from constants import FUTURE_STEPS
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
-from transformer import AgentOnlyTransformerPredictor, CrossAgentTransformerPredictor, AutoRegressiveMLP, TwoStageTransformerPredictor
+from transformer import AutoRegressiveMLP, TwoStageTransformerPredictor
 
 def get_device():
     # Set device for training speedup

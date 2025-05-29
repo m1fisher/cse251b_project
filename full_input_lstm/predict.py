@@ -9,7 +9,7 @@ import tqdm
 
 from load_data import TrajectoryDatasetTest, load_test_data, load_train_data, load_train_data_subset
 from models import LSTM
-from transformer import AgentOnlyTransformerPredictor, TwoStageTransformerPredictor
+from transformer import TwoStageTransformerPredictor
 from train import get_device
 
 
@@ -84,8 +84,8 @@ def predict(model, device, data, output_name):
 if __name__ == "__main__":
     test_data = load_test_data()
     # train_data = load_train_data()
-    #data = load_train_data_subset('src_data/train.npz')
-    data = load_test_data('src_data')
+    data = load_train_data_subset('src_data/train.npz')
+    #data = load_test_data('src_data')
     device = get_device()
     model_file = sys.argv[1]
     outname = sys.argv[2]

@@ -95,7 +95,7 @@ def augment(scene):
 
     # Random scaling (zoom)
     if np.random.rand() < 0.5:
-        scale = np.random.uniform(0.8, 1.2)
+        scale = np.random.uniform(0.6, 1.4)
         scene[..., :4] *= scale  # scale x, y, vx, vy
 
 #    # Small Gaussian noise to position and velocity
@@ -114,7 +114,7 @@ def augment(scene):
 
     # Random dropout of agents (optional, for multi-agent)
     if np.random.rand() < 0.3:
-        agent_mask = np.random.rand(scene.shape[0]) < 0.1  # 10% agents dropped
+        agent_mask = np.random.rand(scene.shape[0]) < 0.2  # 20% agents dropped
         scene[agent_mask, ...] = 0.0
 
     return scene

@@ -8,7 +8,6 @@ import torch
 import tqdm
 
 from load_data import TrajectoryDatasetTest, load_test_data, load_train_data, load_train_data_subset
-from models import LSTM
 from transformer import TwoStageTransformerPredictor
 from train import get_device
 

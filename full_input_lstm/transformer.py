@@ -201,6 +201,7 @@ class TwoStageTransformerPredictor(nn.Module):
             spatial_layer,
             num_layers_spatial
         )
+        self.spatial_norm = nn.LayerNorm(d_model)
 
         # 2) Positional encoding for time axis
         self.time_pos_encoder = PositionalEncoding(d_model)
@@ -217,6 +218,7 @@ class TwoStageTransformerPredictor(nn.Module):
             temporal_layer,
             num_layers_temporal
         )
+        self.temporal_norm = nn.LayerNorm(d_model)
 
         # Final norm + output heads
         self.final_norm = nn.LayerNorm(d_model)
@@ -248,6 +250,7 @@ class TwoStageTransformerPredictor(nn.Module):
         h_sp = self.spatial_encoder(h_sp)
         # back to (B, A, T, d_model)
         h_sp = h_sp.transpose(0, 1).view(B, T, A, -1).permute(0, 2, 1, 3)
+        h_sp = self.spatial_norm(h_sp)
 
         # --- 2) Temporal: cross-time attention per agent ---
         # reshape to (B*A, T, d_model)
@@ -259,6 +262,7 @@ class TwoStageTransformerPredictor(nn.Module):
         h_tm = self.temporal_encoder(h_tm)
         # back to (B, A, T, d_model)
         h_tm = h_tm.transpose(0, 1).reshape(B, A, T, -1)
+        h_tm = self.temporal_norm(h_tm)
 
         # Final norm + heads
         h_final = self.final_norm(h_tm)

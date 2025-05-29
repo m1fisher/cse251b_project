@@ -111,7 +111,6 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
             loss = criterion(pred[:, 0, :, :], y[:, 0, :, :])
             loss /= ACC_STEPS   # scale down
-            #loss = criterion(pred[..., :2], y[..., :2]) / (ACC_STEPS  )   # scale down
 
             # 2) smoothness loss (only if future_steps ≥ 3)
             lambda_ = 1e-0

@@ -11,4 +11,4 @@ training:
   patience: 500
   seed: 42
 kfolds: -1
-dataf: /home/zhaoyang-new/School_Work/cse251b_project/full_input_lstm/src_data/train.npz
+dataf: src_data/train.npz

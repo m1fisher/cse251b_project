@@ -71,6 +71,8 @@ class CrossAgentTransformerPredictor(nn.Module):
         else:
             x = input_data
         # Only consider one second of time
+        # TODO: try more time
+        # TODO: visualize high MSE scenes
         x = x[:, :, -10:, :]
         B, A, T, F = x.shape
 
@@ -93,6 +95,179 @@ class CrossAgentTransformerPredictor(nn.Module):
         fut  = self.forecast(last)        # → (B, A, future_steps*output_dim)
         fut  = fut.view(B, A, self.future_steps, self.output_dim)
         return fut
+
+
+class AgentOnlyTransformerPredictor(nn.Module):
+    def __init__(self,
+                 num_features: int,
+                 d_model: int = 24,
+                 nhead: int = 4,
+                 num_layers: int = 2,
+                 dim_feedforward: int = 128,
+                 dropout: float = 0.1,
+                 future_steps: int = FUTURE_STEPS,
+                 output_dim: int = None):
+        super().__init__()
+        self.output_dim = output_dim or num_features
+        self.future_steps = future_steps
+
+        self.input_proj = nn.Linear(num_features, d_model)
+        self.input_norm = nn.LayerNorm(d_model)
+        # this transformer now does *only* cross-agent attention
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='gelu'
+        )
+        self.cross_agent_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers
+        )
+        self.final_norm = nn.LayerNorm(d_model)
+        self.reconstruct = nn.Linear(d_model, self.output_dim)
+        self.forecast    = nn.Linear(d_model, self.future_steps * self.output_dim)
+
+    def forward(self, input_data):
+        # 1) unpack DataBatch or assume tensor
+        if hasattr(input_data, "x") and hasattr(input_data, "num_graphs"):
+            B = input_data.num_graphs
+            x = input_data.x.view(B, 50, 50, 6)
+        else:
+            x = input_data
+        # 2) take last 10 timesteps
+        x = x[:, :, -10:, :]           # → (B, A, T, F) with T=10
+
+        B, A, T, F = x.shape
+        # 3) project into d_model
+        h = self.input_proj(x)         # → (B, A, T, d_model)
+        h = self.input_norm(h)
+
+        # 4) reshape for cross-agent attention:
+        #    (B, A, T, d) → (T, B, A, d) → (A, B*T, d)
+        h = h.permute(2, 0, 1, 3)                          # (T, B, A, d)
+        h = h.reshape(T * B, A, -1)                       # (B*T, A, d)
+        h = h.transpose(0, 1)                             # (A, B*T, d)
+
+        # 5) run *only* cross-agent encoder (attends across A)
+        h = self.cross_agent_encoder(h)                   # (A, B*T, d)
+
+        # 6) undo transforms → back to (B, A, T, d)
+        h = h.transpose(0, 1).reshape(T, B, A, -1)        # (T, B, A, d)
+        h = h.permute(1, 2, 0, 3)                         # (B, A, T, d)
+
+        # 7) final norm & heads
+        h = self.final_norm(h)                            # (B, A, T, d)
+        recon = self.reconstruct(h)                       # (B, A, T, out_dim)
+
+        last = h[:, :, -1, :]                             # (B, A, d)
+        fut  = self.forecast(last)                        # (B, A, future_steps*out_dim)
+        fut  = fut.view(B, A, self.future_steps, self.output_dim)
+
+        return fut
+
+class TwoStageTransformerPredictor(nn.Module):
+    """
+    Two-stage Transformer: first cross-agent attention per timestep,
+    then cross-time attention per agent.
+    """
+    def __init__(self,
+                 num_features: int,
+                 d_model: int = 64,
+                 nhead: int = 4,
+                 num_layers_spatial: int = 1,
+                 num_layers_temporal: int = 1,
+                 dim_feedforward: int = 128,
+                 dropout: float = 0.1,
+                 future_steps: int = 60,
+                 output_dim: int = None):
+        super().__init__()
+        self.output_dim   = output_dim or num_features
+        self.future_steps = future_steps
+
+        # Input projection + norm
+        self.input_proj = nn.Linear(num_features, d_model)
+        self.input_norm = nn.LayerNorm(d_model)
+
+        # 1) Spatial encoder: cross-agent attention
+        spatial_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='gelu'
+        )
+        self.spatial_encoder = nn.TransformerEncoder(
+            spatial_layer,
+            num_layers_spatial
+        )
+
+        # 2) Positional encoding for time axis
+        self.time_pos_encoder = PositionalEncoding(d_model)
+
+        # 3) Temporal encoder: cross-time attention
+        temporal_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=dim_feedforward,
+            dropout=dropout,
+            activation='gelu'
+        )
+        self.temporal_encoder = nn.TransformerEncoder(
+            temporal_layer,
+            num_layers_temporal
+        )
+
+        # Final norm + output heads
+        self.final_norm = nn.LayerNorm(d_model)
+        self.reconstruct = nn.Linear(d_model, self.output_dim)
+        self.forecast    = nn.Linear(d_model, self.future_steps * self.output_dim)
+
+    def forward(self, input_data):
+        # Unpack DataBatch or use raw tensor
+        if hasattr(input_data, 'x') and hasattr(input_data, 'num_graphs'):
+            B = input_data.num_graphs
+            # assuming x shape is (B*A, T, F)
+            # reshape to (B, A, T, F)
+            n_agents, seq_len, feat = 50, 50, input_data.x.size(-1)
+            x = input_data.x.view(B, n_agents, seq_len, feat)
+        else:
+            x = input_data  # (B, A, T, F)
+
+        # Keep last timesteps (optional)
+        x = x[:, :, -25:, :]
+        B, A, T, F = x.shape
+
+        # Project to model dim
+        h = self.input_proj(x)
+        h = self.input_norm(h)            # → (B, A, T, d_model)
+
+        # --- 1) Spatial: cross-agent attention per timestep ---
+        # reshape to (B*T, A, d_model) then (A, B*T, d_model)
+        h_sp = h.view(B * T, A, -1).transpose(0, 1)
+        h_sp = self.spatial_encoder(h_sp)
+        # back to (B, A, T, d_model)
+        h_sp = h_sp.transpose(0, 1).view(B, T, A, -1).permute(0, 2, 1, 3)
+
+        # --- 2) Temporal: cross-time attention per agent ---
+        # reshape to (B*A, T, d_model)
+        h_tm = h_sp.permute(0, 2, 1, 3).reshape(B * A, T, -1)
+        # add time positional encoding
+        h_tm = self.time_pos_encoder(h_tm)
+        # to (T, B*A, d_model) for Transformer
+        h_tm = h_tm.transpose(0, 1)
+        h_tm = self.temporal_encoder(h_tm)
+        # back to (B, A, T, d_model)
+        h_tm = h_tm.transpose(0, 1).reshape(B, A, T, -1)
+
+        # Final norm + heads
+        h_final = self.final_norm(h_tm)
+        recon = self.reconstruct(h_final)
+        last  = h_final[:, :, -1, :]
+        fut   = self.forecast(last).view(B, A, self.future_steps, self.output_dim)
+
+        return fut
+
 
 class AutoRegressiveMLP(nn.Module):
     def __init__(self,

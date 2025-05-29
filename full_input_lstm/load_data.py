@@ -20,6 +20,11 @@ def load_train_data(data_dir=DATA_DIR):
     train_data = train_data[:, :, :50, :]
     return train_data
 
+def load_train_data_subset(data_path):
+    train_data = np.load(data_path)['data']
+    train_data = train_data[:, :, :50, :]
+    return train_data
+
 def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     train_data = np.load(data_file)['data']
     N = len(train_data)
@@ -81,34 +86,34 @@ def augment(scene):
         scene[..., :2] = scene[..., :2] @ R
         scene[..., 2:4] = scene[..., 2:4] @ R
         scene[..., 4] = wrap(scene[..., 4] + theta)
-    
+
     # Random mirroring (reflection)
     if np.random.rand() < 0.5:
         scene[..., 0] *= -1
         scene[..., 2] *= -1
         scene[..., 4] = wrap(np.pi - scene[..., 4])
-    
+
     # Random scaling (zoom)
     if np.random.rand() < 0.5:
-        scale = np.random.uniform(0.9, 1.1)
+        scale = np.random.uniform(0.8, 1.2)
         scene[..., :4] *= scale  # scale x, y, vx, vy
 
-    # Small Gaussian noise to position and velocity
-    if np.random.rand() < 0.5:
-        noise = np.random.normal(0, 0.05, size=scene[..., :4].shape)
-        scene[..., :4] += noise
-
-    # Small random perturbation of heading angle
-    if np.random.rand() < 0.5:
-        scene[..., 4] += np.random.normal(0, 0.05, size=scene[..., 4].shape)
-        scene[..., 4] = wrap(scene[..., 4])
-
-    # Velocity perturbation
-    if np.random.rand() < 0.5:
-        scene[..., 2:4] += np.random.normal(0, 0.1, size=scene[..., 2:4].shape)
+#    # Small Gaussian noise to position and velocity
+#    if np.random.rand() < 0.5:
+#        noise = np.random.normal(0, 0.05, size=scene[..., :4].shape)
+#        scene[..., :4] += noise
+#
+#    # Small random perturbation of heading angle
+#    if np.random.rand() < 0.5:
+#        scene[..., 4] += np.random.normal(0, 0.05, size=scene[..., 4].shape)
+#        scene[..., 4] = wrap(scene[..., 4])
+#
+#    # Velocity perturbation
+#    if np.random.rand() < 0.5:
+#        scene[..., 2:4] += np.random.normal(0, 0.1, size=scene[..., 2:4].shape)
 
     # Random dropout of agents (optional, for multi-agent)
-    if np.random.rand() < 0.2:
+    if np.random.rand() < 0.3:
         agent_mask = np.random.rand(scene.shape[0]) < 0.1  # 10% agents dropped
         scene[agent_mask, ...] = 0.0
 
@@ -144,10 +149,6 @@ class TrajectoryDatasetTrain(Dataset):
             scene = augment(scene)
         hist = scene[:, time_idx:time_idx+self.history_steps, :].copy()
         future = scene[:, time_idx+self.history_steps:time_idx+self.history_steps+self.future_steps, :].copy()
-
-
-        # TODO: Make sure that data augmentation is correct,
-        # consider shifting by some distance.
 
         # Use the last timeframe of the historical trajectory as the origin
         origin = hist[0, 49, :2].copy()  # (2,)

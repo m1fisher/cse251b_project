@@ -11,7 +11,7 @@ from constants import FUTURE_STEPS
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
-from transformer import CrossAgentTransformerPredictor, AutoRegressiveMLP
+from transformer import AgentOnlyTransformerPredictor, CrossAgentTransformerPredictor, AutoRegressiveMLP, TwoStageTransformerPredictor
 
 def get_device():
     # Set device for training speedup
@@ -43,8 +43,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     elif model_cfg['name'] == 'SN':
         model = SocialLSTMPredictor()
     elif model_cfg['name'] == 'Transformer':
-        model = CrossAgentTransformerPredictor(num_features=6)
+        #model = CrossAgentTransformerPredictor(num_features=6)
         #model = AutoRegressiveMLP(num_features=6)
+        #model = AgentOnlyTransformerPredictor(num_features=6)
+        model = TwoStageTransformerPredictor(num_features=6)
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -58,7 +60,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
 
     opt_cfg = cfg["optimizer"]
     if opt_cfg['name'] == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(),
+        optimizer = torch.optim.AdamW(model.parameters(),
                                      lr=opt_cfg["lr"],
                                      betas=(opt_cfg["beta1"], opt_cfg["beta2"]),
                                      weight_decay=opt_cfg["weight_decay"])
@@ -71,7 +73,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
     )
     main_sched = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=10, gamma=0.7
+        optimizer, step_size=5, gamma=0.5
     )
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup, main_sched], milestones=[warm_epochs]
@@ -81,7 +83,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     # )  # You can try different schedulers
 
     criterion = torch.nn.MSELoss()
-
+    validation_criterion = torch.nn.MSELoss()
     #scaler = torch.amp.GradScaler()  # allows mixed precision for reduced VRAM usage
     ACC_STEPS = 1  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
 
@@ -103,10 +105,23 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             batch = batch.to(device)
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
-            # For now, only evaluate loss on (x, y) position of hero agent
-            loss = criterion(pred[:, 0, :, :], y[:, 0, :, :]) / ACC_STEPS   # scale down
-
+            # TODO: add auxiliary/reconstruction loss
+            # For now, only evaluate loss on hero agent features
+            pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            loss = criterion(pred[:, 0, :, :], y[:, 0, :, :])
+            loss /= ACC_STEPS   # scale down
             #loss = criterion(pred[..., :2], y[..., :2]) / (ACC_STEPS  )   # scale down
+
+            # 2) smoothness loss (only if future_steps ≥ 3)
+            lambda_ = 1e-0
+            if pred.size(2) >= 3:
+                acc = pred[..., 2:, :] - 2*pred[..., 1:-1, :] + pred[..., :-2, :]
+                L_smooth = acc.pow(2).mean()
+            else:
+                L_smooth = 0.0
+
+            loss += lambda_ * L_smooth
             loss.backward()
             # (optional) gradient clip – scale **before** unscaling
             if (step + 1) % ACC_STEPS == 0 or (step + 1) == len(train_dataloader):
@@ -123,7 +138,6 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         if isinstance(val_dataloader, int) and val_dataloader == -1:
             ## skipping validation as no validation dataset passed in
             scheduler.step()
-            # scheduler.step(val_loss)
             tqdm.tqdm.write(
                 f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
             )
@@ -138,20 +152,24 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 i = 0
                 for batch in tqdm.tqdm(val_dataloader):
                     i += 1
-                    if i > 100:
+                    if i > 1000:
                         break
                     batch = batch.to(device)
                     x = batch.x.view(batch.num_graphs, 50, 50, 6)
-                    pred = model(x)
-#                    preds = []
-#                    for i in range(60):
-#                        pred = model(x)
-#                        preds.append(pred[:, :, 0, :])
-#                        x = torch.cat([x, pred], dim=2)[:, :, 1:]
-#                    pred = torch.stack(preds, dim=2)
+                    if FUTURE_STEPS == 60:
+                        pred = model(x)
+                    else:
+                        # use autoregression
+                        # TODO: set up variable future_step autoregression?
+                        preds = []
+                        for i in range(60):
+                            pred = model(x)
+                            preds.append(pred[:, :, 0, :])
+                            x = torch.cat([x, pred], dim=2)[:, :, 1:]
+                        pred = torch.stack(preds, dim=2)
                     y = batch.y.view(batch.num_graphs, 60, 2)
 
-                    val_loss += criterion(pred[:, 0, :, :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
+                    val_loss += validation_criterion(pred[:, 0, :, :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)
 
                     # show MAE and MSE with unnormalized data
                     pred = pred[:, 0, :, :2] * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
@@ -159,11 +177,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                     val_mae += torch.nn.L1Loss()(pred, y).item()
                     val_mse += torch.nn.MSELoss()(pred, y).item()
 
-            val_loss /= len(val_dataloader)
-            val_mae /= len(val_dataloader)
-            val_mse /= len(val_dataloader)
+            val_loss /= i
+            val_mae /= i
+            val_mse /= i
             scheduler.step()
-            # scheduler.step(val_loss)
             tqdm.tqdm.write(
                 (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
                  f" | val normalized MSE {val_loss:8.4f}, | val MAE {val_mae:8.4f} | val MSE {val_mse:8.4f}")

@@ -29,7 +29,7 @@ class PositionalEncoding(nn.Module):
 class CrossAgentTransformerPredictor(nn.Module):
     def __init__(self,
                  num_features: int,
-                 d_model: int = 16,
+                 d_model: int = 24,
                  nhead: int = 4,
                  num_layers: int = 2,
                  dim_feedforward: int = 128,
@@ -42,6 +42,7 @@ class CrossAgentTransformerPredictor(nn.Module):
 
         # 1) Project raw features → model dimension
         self.input_proj = nn.Linear(num_features, d_model)
+        self.input_norm = nn.LayerNorm(d_model)
         # 2) Positional encoding over (agent × time) tokens
         self.pos_encoder = PositionalEncoding(d_model)
         # 3) Transformer encoder
@@ -50,9 +51,10 @@ class CrossAgentTransformerPredictor(nn.Module):
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            activation='relu'
+            activation='gelu'
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.final_norm = nn.LayerNorm(d_model)
         self.reconstruct = nn.Linear(d_model, self.output_dim)
         self.forecast = nn.Linear(d_model, self.future_steps * self.output_dim)
 
@@ -74,12 +76,14 @@ class CrossAgentTransformerPredictor(nn.Module):
 
         # 1) merge agent×time
         x = self.input_proj(x)            # → (B, A, T, d_model)
+        x = self.input_norm(x)
         x = x.view(B, A*T, -1)            # → (B, A*T, d_model)
         x = self.pos_encoder(x)           # → (B, A*T, d_model)
         x = x.transpose(0, 1)             # → (A*T, B, d_model)
         h = self.transformer(x)               # → (A*T, B, d_model)
         h = h.transpose(0, 1)             # → (B, A*T, d_model)
         h = h.view(B, A, T, -1)           # → (B, A, T, d_model)
+        h = self.final_norm(h)
 
         # 2) reconstruction at each step
         recon = self.reconstruct(h)       # → (B, A, T, output_dim)
@@ -88,13 +92,12 @@ class CrossAgentTransformerPredictor(nn.Module):
         last = h[:, :, -1, :]             # → (B, A, d_model)
         fut  = self.forecast(last)        # → (B, A, future_steps*output_dim)
         fut  = fut.view(B, A, self.future_steps, self.output_dim)
-        #fut  = fut.view(B, A, self.output_dim)
         return fut
 
 class AutoRegressiveMLP(nn.Module):
     def __init__(self,
                  num_features: int,
-                 hidden_dim: int = 64,
+                 hidden_dim: int = 512,
                  output_dim: int = None,
                  future_steps: int = FUTURE_STEPS):
         """

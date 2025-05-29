@@ -32,7 +32,7 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
             val_size = 0
         train_size = N - val_size
         train_dataset = TrajectoryDatasetTrain(
-            train_data[:train_size], scale=SCALE, augment=True
+            train_data[:train_size], scale=SCALE, future_steps=FUTURE_STEPS, augment=True
         )
         val_dataset = TrajectoryDatasetValidate(
             train_data[train_size:], scale=SCALE,
@@ -42,7 +42,7 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         kf = KFold(n_splits=kfold, shuffle=True)
         for train_idx, val_idx in kf.split(train_data):
             train_dataset = TrajectoryDatasetTrain(
-                train_data[train_idx], scale=SCALE, augment=False
+                train_data[train_idx], scale=SCALE, future_steps=FUTURE_STEPS, augment=False
             )
             val_dataset = TrajectoryDatasetValidate(
                 train_data[val_idx], scale=SCALE
@@ -66,58 +66,88 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
         datasets.append([train_dataloader, val_dataloader])
     return datasets
 
+def wrap(a):
+    """Map angle to (-π, π]."""
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+def augment(scene):
+    # Random rotation
+    if np.random.rand() < 0.5:
+        theta = np.random.uniform(-np.pi, np.pi)
+        R = np.array(
+            [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]],
+            dtype=np.float32,
+        )
+        scene[..., :2] = scene[..., :2] @ R
+        scene[..., 2:4] = scene[..., 2:4] @ R
+        scene[..., 4] = wrap(scene[..., 4] + theta)
+    
+    # Random mirroring (reflection)
+    if np.random.rand() < 0.5:
+        scene[..., 0] *= -1
+        scene[..., 2] *= -1
+        scene[..., 4] = wrap(np.pi - scene[..., 4])
+    
+    # Random scaling (zoom)
+    if np.random.rand() < 0.5:
+        scale = np.random.uniform(0.9, 1.1)
+        scene[..., :4] *= scale  # scale x, y, vx, vy
+
+    # Small Gaussian noise to position and velocity
+    if np.random.rand() < 0.5:
+        noise = np.random.normal(0, 0.05, size=scene[..., :4].shape)
+        scene[..., :4] += noise
+
+    # Small random perturbation of heading angle
+    if np.random.rand() < 0.5:
+        scene[..., 4] += np.random.normal(0, 0.05, size=scene[..., 4].shape)
+        scene[..., 4] = wrap(scene[..., 4])
+
+    # Velocity perturbation
+    if np.random.rand() < 0.5:
+        scene[..., 2:4] += np.random.normal(0, 0.1, size=scene[..., 2:4].shape)
+
+    # Random dropout of agents (optional, for multi-agent)
+    if np.random.rand() < 0.2:
+        agent_mask = np.random.rand(scene.shape[0]) < 0.1  # 10% agents dropped
+        scene[agent_mask, ...] = 0.0
+
+    return scene
 
 class TrajectoryDatasetTrain(Dataset):
-    def __init__(self, data, scale, augment=True):
+    def __init__(self, data, scale, future_steps, augment=True):
         """
         data: Shape (N, 50, 110, 6) Training data
         scale: Scale for normalization (suggested to use 10.0 for Argoverse 2 data)
         augment: Whether to apply data augmentation (only for training)
         """
+        print(f"using augment = {augment}")
         self.data = data
-        self.scale = SCALE
+        self.scale = scale
         self.augment = augment
+        self.future_steps = future_steps
+        self.history_steps = 50
+        self.timesteps = data.shape[2]  # 110
+        self.max_start = self.timesteps - self.history_steps - self.future_steps + 1
+        self.total_samples = len(self.data) * self.max_start
 
     def __len__(self):
-        return len(self.data) # * 60
+        return self.total_samples
 
     def __getitem__(self, idx):
-        scene_idx = idx // 60
-        time_idx = min(idx % 60, 60 - FUTURE_STEPS)
-        # temp
-        scene_idx = idx
-        time_idx = 0
+        scene_idx = idx // self.max_start
+        time_idx = idx % self.max_start
         scene = self.data[scene_idx]
-        # Getting 50 historical timestamps and future timestamps
-        hist = scene[:, time_idx:time_idx+50, :].copy()  # (agents=50, time_seq=50, 6)
-        #future = torch.tensor(scene[:, (time_idx+50+FUTURE_STEPS - 1)].copy(), dtype=torch.float32)  # (60, 2)
-        future = scene[:, time_idx+50:(time_idx+50+FUTURE_STEPS)].copy()  # (60, 2)
 
-        def wrap(a):
-            """Map angle to (-π, π]."""
-            return (a + np.pi) % (2 * np.pi) - np.pi
+        # Data augmentation(only for training)
+        if self.augment:
+            scene = augment(scene)
+        hist = scene[:, time_idx:time_idx+self.history_steps, :].copy()
+        future = scene[:, time_idx+self.history_steps:time_idx+self.history_steps+self.future_steps, :].copy()
+
 
         # TODO: Make sure that data augmentation is correct,
         # consider shifting by some distance.
-        # Data augmentation(only for training)
-        if self.augment:
-            if np.random.rand() < 0.5:
-                theta = np.random.uniform(-np.pi, np.pi)
-                R = np.array(
-                    [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]],
-                    dtype=np.float32,
-                )
-                # Rotate the historical trajectory and future trajectory
-                for x in (hist, future):
-                    x[..., :2] = x[..., :2] @ R
-                    x[..., 2:4] = x[..., 2:4] @ R
-                    x[..., 4] = wrap(x[..., 4] + theta)
-            if np.random.rand() < 0.5:
-                for x in (hist, future):
-                    x[..., 0] *= -1
-                    x[..., 2] *= -1
-                    x[..., 4] = wrap(np.pi - x[..., 4])
-                #future[:, 0] *= -1
 
         # Use the last timeframe of the historical trajectory as the origin
         origin = hist[0, 49, :2].copy()  # (2,)

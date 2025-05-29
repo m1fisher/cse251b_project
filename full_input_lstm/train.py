@@ -43,8 +43,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     elif model_cfg['name'] == 'SN':
         model = SocialLSTMPredictor()
     elif model_cfg['name'] == 'Transformer':
-        #model = CrossAgentTransformerPredictor(num_features=6)
-        model = AutoRegressiveMLP(num_features=6)
+        model = CrossAgentTransformerPredictor(num_features=6)
+        #model = AutoRegressiveMLP(num_features=6)
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -83,7 +83,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     criterion = torch.nn.MSELoss()
 
     #scaler = torch.amp.GradScaler()  # allows mixed precision for reduced VRAM usage
-    ACC_STEPS = 3  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
+    ACC_STEPS = 1  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
 
     fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
@@ -104,7 +104,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             pred = model(batch)
             y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
             # For now, only evaluate loss on (x, y) position of hero agent
-            loss = criterion(pred[:, 0, :, :2], y[:, 0, :, :2]) / ACC_STEPS   # scale down
+            loss = criterion(pred[:, 0, :, :], y[:, 0, :, :]) / ACC_STEPS   # scale down
 
             #loss = criterion(pred[..., :2], y[..., :2]) / (ACC_STEPS  )   # scale down
             loss.backward()
@@ -118,7 +118,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             if z > 1000:
                 break
             #print(train_loss / z)
-
+        train_loss = train_loss / z
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:
             ## skipping validation as no validation dataset passed in
@@ -158,13 +158,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                     y = y * batch.scale.view(-1, 1, 1) + batch.origin.unsqueeze(1)
                     val_mae += torch.nn.L1Loss()(pred, y).item()
                     val_mse += torch.nn.MSELoss()(pred, y).item()
-#
-#            val_loss /= len(val_dataloader)
-#            val_mae /= len(val_dataloader)
-#            val_mse /= len(val_dataloader)
-            val_loss /= i
-            val_mae /= i
-            val_mse /= i
+
+            val_loss /= len(val_dataloader)
+            val_mae /= len(val_dataloader)
+            val_mse /= len(val_dataloader)
             scheduler.step()
             # scheduler.step(val_loss)
             tqdm.tqdm.write(

@@ -192,34 +192,6 @@ def augment(scene):
 
     return scene
 
-def add_acceleration_feature(scenes: np.ndarray, dt: float=0.1) -> np.ndarray:
-    """
-    Args:
-        scenes: np.array of shape (N_agents, T, 6), where
-                [:,:,0:2] = x,y positions,
-                [:,:,2:4] = v_x, v_y,
-                [:,:,4]   = heading,
-                [:,:,5]   = vehicle type.
-        dt:       time difference between frames (e.g. 0.1 s for 10Hz).
-
-    Returns:
-        scenes_aug: np.array of shape (N_agents, T, 8), where
-                    the last two channels are a_x, a_y.
-    """
-    # extract velocity channels
-    vel = scenes[..., 2:4]                # shape (N, T, 2)
-
-    # compute forward differences: shape (N, T-1, 2)
-    dv = vel[:, 1:, :] - vel[:, :-1, :]
-    acc = dv / dt                         # (N, T-1, 2)
-
-    # pad a zero-accel at the first timestep
-    zero_pad = np.zeros((scenes.shape[0], 1, 2), dtype=scenes.dtype)
-    acc = np.concatenate([zero_pad, acc], axis=1)  # (N, T, 2)
-
-    # concatenate accel onto original features → (N, T, 8)
-    scenes_aug = np.concatenate([scenes, acc], axis=-1)
-    return scenes_aug
 
 class TrajectoryDatasetTrain(Dataset):
     def __init__(self, data, scale, future_steps, augment=True):

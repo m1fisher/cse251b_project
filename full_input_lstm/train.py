@@ -10,6 +10,7 @@ import yaml
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
+from torch.optim.lr_scheduler import LambdaLR
 
 
 def get_device():
@@ -62,19 +63,39 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
     ## warmup LR to reduce dead ReLU
-    warm_epochs = 3
-    warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
-    )
-    main_sched = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=10, gamma=0.7
-    )
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer, schedulers=[warmup, main_sched], milestones=[warm_epochs]
-    )
+    # warm_epochs = 3
+    # warmup = torch.optim.lr_scheduler.LinearLR(
+    #     optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
+    # )
+    # main_sched = torch.optim.lr_scheduler.StepLR(
+    #     optimizer, step_size=10, gamma=0.7
+    # )
+    # fine_sched = torch.optim.lr_scheduler.StepLR(
+    #     optimizer, step_size=3, gamma=0.97
+    # )
+    # scheduler = torch.optim.lr_scheduler.SequentialLR(
+    #     optimizer, schedulers=[warmup, main_sched, fine_sched], milestones=[warm_epochs, 150]
+    # )
     # scheduler = torch.optim.lr_scheduler.StepLR(
     #     optimizer, step_size=10, gamma=0.7
     # )  # You can try different schedulers
+
+    def custom_schedule(step):
+        warm_epochs = 3
+        if step < warm_epochs:
+            # Linear warmup from 0.1 to 0.75
+            return 0.1 + (0.75 - 0.1) * step / warm_epochs
+        elif step < 150:
+            # Main schedule: step decay every 10 steps with gamma=0.7
+            steps_since_main = step - warm_epochs
+            return 0.75 * (0.7 ** (steps_since_main // 10))
+        else:
+            # Fine schedule: decay every 3 steps with gamma=0.97
+            steps_since_fine = step - 150
+            main_decay = 0.75 * (0.7 ** ((150 - warm_epochs) // 10))
+            return main_decay * (0.97 ** (steps_since_fine // 3))
+
+    scheduler = LambdaLR(optimizer, lr_lambda=custom_schedule)
 
     criterion = torch.nn.MSELoss()
 

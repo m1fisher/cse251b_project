@@ -106,10 +106,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
             # TODO: add auxiliary/reconstruction loss
             # For now, only evaluate loss on hero agent features
-            #pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
-            #y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
 
-            loss = criterion(pred[:, 0, :, :2], y[:, 0, :, :2])
+            loss = criterion(pred[:, 0, :, :], y[:, 0, :, :])
             #loss += 0.01 * torch.sqrt(criterion(pred[:, 1:, :, :], y[:, 1:, :, :]))
 
             loss /= ACC_STEPS   # scale down

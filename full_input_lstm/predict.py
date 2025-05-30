@@ -8,7 +8,7 @@ import torch
 import tqdm
 
 from load_data import TrajectoryDatasetTest, load_test_data, load_train_data, load_train_data_subset
-from transformer import TwoStageTransformerPredictor
+from transformer import TwoStageTransformerPredictor, LSTM
 from train import get_device
 
 
@@ -31,7 +31,7 @@ def AR_predict_test_set(model, device, data, output_name):
         for batch in tqdm.tqdm(loader):
             batch = batch.to(device)
             B = batch.num_graphs
-            hist = batch.x.view(B, 50, 50, 6).contiguous()  # rolling input
+            hist = batch.x.view(B, 50, 50, NUM_FEATURES).contiguous()  # rolling input
             future_xy_norm = []  # formated output
 
             for step in range(60):  # predict one step at a time
@@ -61,7 +61,7 @@ def predict(model, device, data, output_name):
     scale = 7.0   # TODO: Make this a saved constant
     dataset = TrajectoryDatasetTest(data, scale=scale)
     loader = DataLoader(dataset, batch_size=32, shuffle=False,
-                             collate_fn=lambda xs: Batch.from_data_list(xs))
+                        collate_fn=lambda xs: Batch.from_data_list(xs))
 
     pred_list = []
     with torch.no_grad():
@@ -70,6 +70,7 @@ def predict(model, device, data, output_name):
             pred_norm = model(batch)
             # Subset to only x, y predictions for ego agent
             pred_norm = pred_norm[:, 0, :, :2]
+
             # Reshape the prediction to (N, 60, 2)
             pred = pred_norm * batch.scale.view(-1,1,1) + batch.origin.unsqueeze(1)
             pred_list.append(pred.cpu().numpy())
@@ -83,11 +84,12 @@ def predict(model, device, data, output_name):
 if __name__ == "__main__":
     test_data = load_test_data()
     # train_data = load_train_data()
-    data = load_train_data_subset('src_data/train.npz')
-    #data = load_test_data('src_data')
+    #data = load_train_data_subset('src_data/train.npz')
+    data = load_test_data('src_data')
     device = get_device()
     model_file = sys.argv[1]
     outname = sys.argv[2]
-    model = load_model(TwoStageTransformerPredictor(num_features=6), model_file, device)
+    model = load_model(LSTM(), model_file, device)
+    model.test_time = True
     predict(model, device, data, outname)
     #AR_predict_test_set(model, device, data, outname)

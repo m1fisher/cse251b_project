@@ -7,10 +7,11 @@ import tqdm
 from pathlib import Path
 import yaml
 
-from constants import FUTURE_STEPS
+from constants import FUTURE_STEPS, NUM_FEATURES
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from socialnetwork_model import SocialLSTMPredictor
-from transformer import AutoRegressiveMLP, TwoStageTransformerPredictor
+from transformer import AutoRegressiveMLP, TwoStageTransformerPredictor, LSTM, GRU, TSTD
+from TGR import TFMFModel
 
 def get_device():
     # Set device for training speedup
@@ -37,6 +38,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     model_cfg = cfg['model']
     if model_cfg['name'] == 'lstm':
         model = LSTM()
+        #model = GRU()
     elif model_cfg['name'] == 'LinearForecast':
         model = LinearForecast()
     elif model_cfg['name'] == 'SN':
@@ -45,7 +47,9 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         #model = CrossAgentTransformerPredictor(num_features=6)
         #model = AutoRegressiveMLP(num_features=6)
         #model = AgentOnlyTransformerPredictor(num_features=6)
-        model = TwoStageTransformerPredictor(num_features=6, future_steps=FUTURE_STEPS)
+        model = TwoStageTransformerPredictor(num_features=NUM_FEATURES, future_steps=FUTURE_STEPS)
+    elif model_cfg['name'] == 'TGR':
+        model = TFMFModel()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -66,14 +70,28 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     else:
         raise ValueError(f"Unknown optimizer {opt_cfg['name']}")
 
+    base_lr = opt_cfg["lr"]
+    from torch.optim.lr_scheduler import OneCycleLR
+#    scheduler = OneCycleLR(
+#        optimizer,
+#        max_lr=base_lr * 10,   # up-and-down mountain: peak around 10× base
+#        total_steps=epochs * len(train_dataloader),
+#        pct_start=0.3,          # fraction of cycle spent increasing
+#        anneal_strategy='cos',  # cosine anneal down
+#    )
     ## warmup LR to reduce dead ReLU
-    warm_epochs = 3
+    warm_epochs = 5
     warmup = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.1, end_factor=0.75, total_iters=warm_epochs
+        optimizer, start_factor=0.1, end_factor=1.0, total_iters=warm_epochs
     )
     main_sched = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=5, gamma=0.5
+        optimizer, step_size=5, gamma=0.7
     )
+#    main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+#        optimizer,
+#        T_max=epochs,    # number of epochs to anneal over
+#        eta_min=1e-6         # minimum learning rate
+#    )
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup, main_sched], milestones=[warm_epochs]
     )
@@ -84,7 +102,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     criterion = torch.nn.MSELoss()
     validation_criterion = torch.nn.MSELoss()
     #scaler = torch.amp.GradScaler()  # allows mixed precision for reduced VRAM usage
-    ACC_STEPS = 1  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
+    ACC_STEPS = 3  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
 
     fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
@@ -93,6 +111,13 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     running_loss = 0
     z = 0
     #for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
+    prev_train_loss = float("inf")
+    train_loss_improvement_threshold = 0.0003
+    train_loss_patience = 3
+    train_loss_no_improvement = 0
+    lr_scaling_factor = 0.5
+    lr_threshold_scaling_factor = 0.75
+    min_lr = 1e-6
     for epoch in range(epochs):
         # ---- Training ----
         model.train()
@@ -100,22 +125,33 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         optimizer.zero_grad()
         z = 0
         train_loss = 0
+
         for step, batch in enumerate(tqdm.tqdm(train_dataloader, desc="Batches", unit="batch"), start=0):
             batch = batch.to(device)
             pred = model(batch)
-            y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, 6)
-            # TODO: add auxiliary/reconstruction loss
-            # For now, only evaluate loss on hero agent features
-            pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
-            y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, NUM_FEATURES)
+            # TODO: try all loss variations
+            #pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+            #y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
 
-            loss = criterion(pred[:, 0, :, :], y[:, 0, :, :])
-            #loss += 0.01 * torch.sqrt(criterion(pred[:, 1:, :, :], y[:, 1:, :, :]))
+            # dynamically assign 1/2 loss from ego, 1/2 from other agents
+
+            loss_ego = criterion(pred[:, 0, :, :2], y[:, 0, :, :2])
+            loss = loss_ego
+#            loss_others = torch.sqrt(criterion(pred[:, 1:, :, :], y[:, 1:, :, :]))
+#            loss = loss_ego  #+ 0.01 * loss_others
+#            L0 = loss_ego.detach()
+#            L1 = loss_others.detach()
+#            eps = 1e-8
+#            w0 =   L1 / (L0 + L1 + eps)   # if others-loss ≫ agent0-loss, w0 → 1
+#            w1 =   L0 / (L0 + L1 + eps)   # if others-loss ≫ agent0-loss, w1 → 0
+#            #alpha = 0.9
+#            loss = w0*loss_ego +w1*loss_others
 
             loss /= ACC_STEPS   # scale down
 
             # 2) smoothness loss (only if future_steps ≥ 3)
-            lambda_ = 1e-0
+            lambda_ = 5e-1
             if pred.size(2) >= 3:
                 acc = pred[..., 2:, :] - 2*pred[..., 1:-1, :] + pred[..., :-2, :]
                 L_smooth = acc.pow(2).mean()
@@ -131,10 +167,23 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
-            if z > 5000:
+            if z > 1000:
                 break
             #print(train_loss / z)
         train_loss = train_loss / z
+        if prev_train_loss - train_loss <= train_loss_improvement_threshold:
+          train_loss_no_improvement += 1
+          print(f'no improvement: {train_loss_no_improvement}; {prev_train_loss} -- {train_loss}')
+        else:
+            print(f'improved: {prev_train_loss} -> {train_loss}')
+            train_loss_no_improvement = 0
+        prev_train_loss = train_loss
+        if False and train_loss_no_improvement >= train_loss_patience:
+            print('lr updated')
+            train_loss_no_improvement = 0
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = max(param_group['lr'] * lr_scaling_factor, min_lr)
+                train_loss_improvement_threshold *= lr_threshold_scaling_factor
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:
             ## skipping validation as no validation dataset passed in
@@ -156,7 +205,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                     if i > 1000:
                         break
                     batch = batch.to(device)
-                    x = batch.x.view(batch.num_graphs, 50, 50, 6)
+                    x = batch.x.view(batch.num_graphs, 50, 50, NUM_FEATURES)
                     if FUTURE_STEPS == 60:
                         pred = model(x)
                     else:

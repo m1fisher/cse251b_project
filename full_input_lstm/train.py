@@ -8,7 +8,6 @@ from pathlib import Path
 import yaml
 
 from load_data import DATA_DIR, make_dataloaders, SCALE
-from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
 
 

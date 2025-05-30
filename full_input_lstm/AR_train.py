@@ -45,7 +45,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         #model = CrossAgentTransformerPredictor(num_features=6)
         #model = AutoRegressiveMLP(num_features=6)
         #model = AgentOnlyTransformerPredictor(num_features=6)
-        model = TwoStageTransformerPredictor(num_features=6)
+        model = TwoStageTransformerPredictor(num_features=6, future_steps=FUTURE_STEPS)
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -108,7 +108,10 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             # For now, only evaluate loss on hero agent features
             pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
             y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
+
             loss = criterion(pred[:, 0, :, :], y[:, 0, :, :])
+            #loss += 0.01 * torch.sqrt(criterion(pred[:, 1:, :, :], y[:, 1:, :, :]))
+
             loss /= ACC_STEPS   # scale down
 
             # 2) smoothness loss (only if future_steps ≥ 3)
@@ -128,7 +131,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
-            if z > 1000:
+            if z > 5000:
                 break
             #print(train_loss / z)
         train_loss = train_loss / z
@@ -159,12 +162,30 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                     else:
                         # use autoregression
                         # TODO: set up variable future_step autoregression?
+                        # preds = []
+                        # for i in range(60):
+                        #     pred = model(x)
+                        #     preds.append(pred[:, :, 0, :])
+                        #     x = torch.cat([x, pred], dim=2)[:, :, 1:]
+                        # pred = torch.stack(preds, dim=2)
+                        total_future = 60  # or whatever your total prediction length is
+                        pred_steps = FUTURE_STEPS  # number of steps your model predicts per call
                         preds = []
-                        for i in range(60):
-                            pred = model(x)
-                            preds.append(pred[:, :, 0, :])
-                            x = torch.cat([x, pred], dim=2)[:, :, 1:]
-                        pred = torch.stack(preds, dim=2)
+                        n_iters = total_future // pred_steps
+                        remainder = total_future % pred_steps
+
+                        for _ in range(n_iters):
+                            pred = model(x)  # (B, A, pred_steps, F)
+                            preds.append(pred)
+                            # Concatenate predictions to input, remove oldest steps to keep input length fixed
+                            x = torch.cat([x, pred], dim=2)[:, :, pred_steps:]
+
+                        if remainder > 0:
+                            pred = model(x)  # (B, A, pred_steps, F)
+                            preds.append(pred[:, :, :remainder, :])  # Only take the needed steps
+
+                        # Concatenate all predicted steps along the time axis
+                        pred = torch.cat(preds, dim=2)  # (B, A, total_future, F)
                     y = batch.y.view(batch.num_graphs, 60, 2)
 
                     val_loss += validation_criterion(pred[:, 0, :, :2], y).item()  # for models that output all 6-dim, evaluate the loss on only the (x,y)

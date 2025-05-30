@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Data, Batch
 from sklearn.model_selection import KFold
 
-from constants import FUTURE_STEPS
+from constants import FUTURE_STEPS, PREV_STEPS
 
 DATA_DIR = "src_data/"
 SCALE = 7.0
@@ -24,6 +24,79 @@ def load_train_data_subset(data_path):
     train_data = np.load(data_path)['data']
     train_data = train_data[:, :, :50, :]
     return train_data
+
+def augment_features(scenes: np.ndarray, dt: float = 0.1) -> np.ndarray:
+    """
+    Args:
+      scenes: (N_agents, T, 6) with [x,y, v_x,v_y, theta, type]
+      dt:     timestep duration (e.g. 0.1s)
+
+    Returns:
+      (N_agents, T, new_D) array with extra channels:
+        [ x, y,
+          v_x, v_y,
+          theta_sin, theta_cos,
+          speed,
+          a_x, a_y,
+          accel_mag,
+          jerk,
+          omega (ang. vel),
+          type ]
+    """
+    N, T, _ = scenes.shape
+    pos   = scenes[..., 0:2]     # (N, T, 2)
+    vel   = scenes[..., 2:4]     # (N, T, 2)
+    theta = scenes[..., 4]       # (N, T)
+    typ   = scenes[..., 5:]     # (N, T, 1)
+
+    # 1) speed
+    speed = np.linalg.norm(vel, axis=-1, keepdims=True)  # (N, T, 1)
+
+    # 2) acceleration (as before)
+    dv    = vel[:, 1:, :] - vel[:, :-1, :]
+    accel = np.concatenate([
+        np.zeros((N,1,2)),  # zero-pad at t=0
+        dv / dt
+    ], axis=1)                                            # (N, T, 2)
+    accel_mag = np.linalg.norm(accel, axis=-1, keepdims=True)
+
+    # 3) jerk
+    da   = accel[:, 1:, :] - accel[:, :-1, :]
+    jerk = np.concatenate([
+        np.zeros((N,1,2)),
+        da / dt
+    ], axis=1)                                            # (N, T, 2)
+    jerk_mag = np.linalg.norm(jerk, axis=-1, keepdims=True)
+
+    # 4) heading sin/cos
+    theta_sin = np.sin(theta)[..., None]  # (N, T, 1)
+    theta_cos = np.cos(theta)[..., None]
+
+    # 5) angular velocity ω
+    dtheta = theta[:,1:] - theta[:,:-1]
+    omega  = np.concatenate([
+       np.zeros((N,1)),
+       (dtheta / dt)
+    ], axis=1)[..., None]                            # (N, T, 1)
+
+    # concatenate everything
+
+    out = np.concatenate([
+      pos,           # 2
+      vel,           # 2
+      theta_sin,     # 1
+      theta_cos,     # 1
+      speed,         # 1
+      accel,         # 2
+      accel_mag,     # 1
+      jerk,          # 2
+      jerk_mag,      # 1
+      omega,         # 1
+      typ            # 1
+    ], axis=-1)
+
+    return out  # shape (N, T, 15)
+
 
 def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     train_data = np.load(data_file)['data']
@@ -94,7 +167,7 @@ def augment(scene):
         scene[..., 4] = wrap(np.pi - scene[..., 4])
 
     # Random scaling (zoom)
-    if np.random.rand() < 0.5:
+    if np.random.rand() < 0.0:
         scale = np.random.uniform(0.6, 1.4)
         scene[..., :4] *= scale  # scale x, y, vx, vy
 
@@ -113,11 +186,12 @@ def augment(scene):
 #        scene[..., 2:4] += np.random.normal(0, 0.1, size=scene[..., 2:4].shape)
 
     # Random dropout of agents (optional, for multi-agent)
-    if np.random.rand() < 0.3:
-        agent_mask = np.random.rand(scene.shape[0]) < 0.2  # 20% agents dropped
+    if np.random.rand() < 0.0:
+        agent_mask = np.random.rand(scene.shape[0]) < 0.1  # 20% agents dropped
         scene[agent_mask, ...] = 0.0
 
     return scene
+
 
 class TrajectoryDatasetTrain(Dataset):
     def __init__(self, data, scale, future_steps, augment=True):
@@ -131,7 +205,7 @@ class TrajectoryDatasetTrain(Dataset):
         self.scale = scale
         self.augment = augment
         self.future_steps = future_steps
-        self.history_steps = 50
+        self.history_steps = PREV_STEPS
         self.timesteps = data.shape[2]  # 110
         self.max_start = self.timesteps - self.history_steps - self.future_steps + 1
         self.total_samples = len(self.data) * self.max_start
@@ -147,11 +221,12 @@ class TrajectoryDatasetTrain(Dataset):
         # Data augmentation(only for training)
         if self.augment:
             scene = augment(scene)
+        scene = augment_features(scene)
         hist = scene[:, time_idx:time_idx+self.history_steps, :].copy()
         future = scene[:, time_idx+self.history_steps:time_idx+self.history_steps+self.future_steps, :].copy()
 
         # Use the last timeframe of the historical trajectory as the origin
-        origin = hist[0, 49, :2].copy()  # (2,)
+        origin = hist[0, self.history_steps - 1, :2].copy()  # (2,)
         hist[..., :2] = hist[..., :2] - origin
         future[..., :2] = future[..., :2] - origin
 
@@ -165,7 +240,6 @@ class TrajectoryDatasetTrain(Dataset):
             origin=torch.tensor(origin, dtype=torch.float32).unsqueeze(0),
             scale=torch.tensor(self.scale, dtype=torch.float32),
         )
-
         return data_item
 
 class TrajectoryDatasetValidate(Dataset):
@@ -183,6 +257,7 @@ class TrajectoryDatasetValidate(Dataset):
 
     def __getitem__(self, idx):
         scene = self.data[idx]
+        scene = augment_features(scene)
         # Getting 50 historical timestamps and 60 future timestamps
         hist = scene[:, :50, :].copy()  # (agents=50, time_seq=50, 6)
         future = torch.tensor(scene[0, 50:, :2].copy(), dtype=torch.float32)  # (60, 2)
@@ -225,6 +300,7 @@ class TrajectoryDatasetTest(Dataset):
     def __getitem__(self, idx):
         # Testing data only contains historical trajectory
         scene = self.data[idx]  # (50, 50, 6)
+        scene = augment_features(scene)
         hist = scene.copy()
 
         origin = hist[0, 49, :2].copy()

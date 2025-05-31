@@ -230,7 +230,7 @@ class LSTM(nn.Module):
         else:
             x = data
 
-        x = x[:, 0, -25:, :] # Only Consider ego agent index 0
+        x = x[:, 0, -PREV_STEPS:, :] # Only Consider ego agent index 0
         #B, A, T, F = x.shape
         #x = x.view(B*A, T, F)
         #x_joint = x.permute(0, 2, 1, 3).reshape(B, T, A*F)

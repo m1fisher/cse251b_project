@@ -95,7 +95,7 @@ class TwoStageTransformerPredictor(nn.Module):
             B = input_data.num_graphs
             # assuming x shape is (B*A, T, F)
             # reshape to (B, A, T, F)
-            n_agents, seq_len, feat = 50, 50, input_data.x.size(-1)
+            n_agents, seq_len, feat = 50, PREV_STEPS, input_data.x.size(-1)
             x = input_data.x.view(B, n_agents, seq_len, feat)
         else:
             x = input_data  # (B, A, T, F)
@@ -213,7 +213,7 @@ class AutoRegressiveMLP(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_dim=NUM_FEATURES, hidden_dim=256, num_layers=1, output_dim=60 * 2, dropout=0.0):
+    def __init__(self, input_dim=NUM_FEATURES, hidden_dim=1024, num_layers=1, output_dim=60 * 2, dropout=0.0):
         super(LSTM, self).__init__()
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
                             dropout=dropout)

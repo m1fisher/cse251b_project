@@ -10,6 +10,8 @@ import yaml
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from models import LSTM, LinearForecast
 from socialnetwork_model import SocialLSTMPredictor
+from ensembled_decoding_model import HybridTrajNet
+from ensembled_decoding_modelv2 import HybridTrajNetv2
 from torch.optim.lr_scheduler import LambdaLR
 
 
@@ -42,6 +44,8 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         model = LinearForecast()
     elif model_cfg['name'] == 'SN':
         model = SocialLSTMPredictor()
+    elif model_cfg['name'] == 'hybrid':
+        model = HybridTrajNetv2()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -80,32 +84,38 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
     #     optimizer, step_size=10, gamma=0.7
     # )  # You can try different schedulers
 
-    def custom_schedule(step):
-        warm_epochs = 3
-        if step < warm_epochs:
-            # Linear warmup from 0.1 to 0.75
-            return 0.1 + (0.75 - 0.1) * step / warm_epochs
-        elif step < 150:
-            # Main schedule: step decay every 10 steps with gamma=0.7
-            steps_since_main = step - warm_epochs
-            return 0.75 * (0.7 ** (steps_since_main // 10))
-        else:
-            # Fine schedule: decay every 3 steps with gamma=0.97
-            steps_since_fine = step - 150
-            main_decay = 0.75 * (0.7 ** ((150 - warm_epochs) // 10))
-            return main_decay * (0.97 ** (steps_since_fine // 3))
-
-    scheduler = LambdaLR(optimizer, lr_lambda=custom_schedule)
+    # def custom_schedule(step):
+    #     warm_epochs = 3
+    #     if step < warm_epochs:
+    #         # Linear warmup from 0.1 to 0.75
+    #         return 0.1 + (0.75 - 0.1) * step / warm_epochs
+    #     elif step < 150:
+    #         # Main schedule: step decay every 10 steps with gamma=0.7
+    #         steps_since_main = step - warm_epochs
+    #         return 0.75 * (0.7 ** (steps_since_main // 5))
+    #     else:
+    #         # Fine schedule: decay every 3 steps with gamma=0.97
+    #         steps_since_fine = step - 150
+    #         main_decay = 0.75 * (0.7 ** ((150 - warm_epochs) // 10))
+    #         return main_decay * (0.97 ** (steps_since_fine // 3))
+    #
+    # scheduler = LambdaLR(optimizer, lr_lambda=custom_schedule)
 
     criterion = torch.nn.MSELoss()
 
     scaler = torch.amp.GradScaler('cuda')  # allows mixed precision for reduced VRAM usage
-    ACC_STEPS = 3  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
+    ACC_STEPS = 1  # effective_batch = ACC_STEPS × DataLoader batch; reduced VRAM usage
 
     fp_write = open(f"{out_dir}/training_epoches.{cfg['k_id']}tsv", 'w')
     fp_write.write("epoch\tlearning_rate\ttrain_loss\tval_loss\tval_mae\tval_mse\n")
     best_val_loss = float("inf")
     no_improvement = 0
+    best_train_loss = float("inf")
+    train_loss_improvement_threshold = 0.003
+    train_loss_patience = 5
+    train_loss_no_improvement = 0
+    lr_scaling_factor = 0.42
+    lr_threshold_scaling_factor = 0.75
     for epoch in tqdm.tqdm(range(epochs), desc="Epoch", unit="epoch"):
         # ---- Training ----
         model.train()
@@ -129,10 +139,23 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
         train_loss /= len(train_dataloader)
+        if best_train_loss - train_loss <= train_loss_improvement_threshold:
+            train_loss_no_improvement += 1
+            print(f'no improvement: {train_loss_no_improvement}; {best_train_loss} -- {train_loss}')
+        else:
+            print(f'best train loss updated: {best_train_loss} -> {train_loss}')
+            best_train_loss = train_loss
+            train_loss_no_improvement = 0
+        if train_loss_no_improvement >= train_loss_patience:
+            print('lr updated')
+            train_loss_no_improvement = 0
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = param_group['lr'] * lr_scaling_factor
+            train_loss_improvement_threshold *= lr_threshold_scaling_factor
 
         if isinstance(val_dataloader, int) and val_dataloader == -1:
             ## skipping validation as no validation dataset passed in
-            scheduler.step()
+            # scheduler.step()
             # scheduler.step(val_loss)
             tqdm.tqdm.write(
                 f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"
@@ -160,7 +183,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
             val_loss /= len(val_dataloader)
             val_mae /= len(val_dataloader)
             val_mse /= len(val_dataloader)
-            scheduler.step()
+            # scheduler.step()
             # scheduler.step(val_loss)
             tqdm.tqdm.write(
                 (f"Epoch {epoch:03d} | Learning rate {optimizer.param_groups[0]['lr']:.6f} | train normalized MSE {train_loss:8.4f}"

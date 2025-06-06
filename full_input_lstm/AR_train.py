@@ -7,10 +7,11 @@ import tqdm
 from pathlib import Path
 import yaml
 
-from constants import FUTURE_STEPS, NUM_FEATURES
+from constants import FUTURE_STEPS, NUM_AGENTS, NUM_FEATURES
 from load_data import DATA_DIR, make_dataloaders, SCALE
 from socialnetwork_model import SocialLSTMPredictor
-from transformer import AutoRegressiveMLP, TwoStageTransformerPredictor, LSTM, GRU, TSTD
+from transformer import TwoStageTransformerPredictor, LSTM
+from ssm import KFLSTMForecast, SSM_LSTM_MultiForecast
 from TGR import TFMFModel
 
 def get_device():
@@ -48,8 +49,11 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         #model = AutoRegressiveMLP(num_features=6)
         #model = AgentOnlyTransformerPredictor(num_features=6)
         model = TwoStageTransformerPredictor(num_features=NUM_FEATURES, future_steps=FUTURE_STEPS)
+        model = GNNLSTMPredictor()
     elif model_cfg['name'] == 'TGR':
         model = TFMFModel()
+    elif model_cfg['name'] == 'SSM':
+        model = SSM_LSTM_MultiForecast()
     else:
         raise ValueError(f"Unknown optimizer {model_cfg['name']}")
 
@@ -129,12 +133,13 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
         for step, batch in enumerate(tqdm.tqdm(train_dataloader, desc="Batches", unit="batch"), start=0):
             batch = batch.to(device)
             pred = model(batch)
-            y = batch.y.view(batch.num_graphs, 50, FUTURE_STEPS, NUM_FEATURES)
+            y = batch.y.view(batch.num_graphs, NUM_AGENTS, FUTURE_STEPS, NUM_FEATURES)
             # TODO: try all loss variations
             #pred[..., :2] = pred[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
             #y[..., :2] = y[..., :2] * batch.scale.view(batch.num_graphs, 1, 1, 1) + batch.origin.view(batch.num_graphs, 1, 1, 2)
 
             # dynamically assign 1/2 loss from ego, 1/2 from other agents
+
 
             loss_ego = criterion(pred[:, 0, :, :2], y[:, 0, :, :2])
             loss = loss_ego
@@ -167,7 +172,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                 optimizer.zero_grad(set_to_none=True)
             train_loss += loss.item() * ACC_STEPS                # undo scaling
             z += 1
-            if z > 1000:
+            if z > 5000:
                 break
             #print(train_loss / z)
         train_loss = train_loss / z
@@ -205,7 +210,7 @@ def run_training(cfg, out_dir, train_dataloader, val_dataloader):
                     if i > 1000:
                         break
                     batch = batch.to(device)
-                    x = batch.x.view(batch.num_graphs, 50, 50, NUM_FEATURES)
+                    x = batch.x.view(batch.num_graphs, NUM_AGENTS, 50, NUM_FEATURES)
                     if FUTURE_STEPS == 60:
                         pred = model(x)
                     else:

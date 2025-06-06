@@ -1,4 +1,5 @@
 FUTURE_STEPS = 60
 PREV_STEPS = 25
 NUM_FEATURES = 15
+NUM_AGENTS = 1 # including ego agent
 

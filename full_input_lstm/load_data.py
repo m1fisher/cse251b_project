@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch_geometric.data import Data, Batch
 from sklearn.model_selection import KFold
 
-from constants import FUTURE_STEPS, PREV_STEPS
+from constants import FUTURE_STEPS, PREV_STEPS, NUM_AGENTS
 
 DATA_DIR = "src_data/"
 SCALE = 7.0
@@ -24,6 +24,38 @@ def load_train_data_subset(data_path):
     train_data = np.load(data_path)['data']
     train_data = train_data[:, :, :50, :]
     return train_data
+
+def mask_far_agents(arr, num_to_keep=10):
+    # Suppose `arr` is your array of shape (50, 110, 6).
+    #   arr[a, t, f]: agent a, timestep t, feature f,
+    # and features 0,1 are the (x,y) coordinates.
+
+    # 1) Extract the (x,y) trajectories for all agents:
+    positions = arr[..., :2]          # shape (50, 110, 2)
+
+    # 2) Compute, for each agent a, the per‐timestep distance to the ego (a = 0):
+    ego_xy = positions[0]             # shape (110, 2)
+    diffs   = positions - ego_xy      # broadcasts to (50, 110, 2)
+    dists   = np.linalg.norm(diffs, axis=2)  # shape (50, 110)
+
+    # 3) Take the minimum over time for each agent:
+    min_dists = dists.min(axis=1)     # shape (50,)
+
+    # 4) Exclude the ego itself from selection by forcing its “min_dist” to ∞:
+    min_dists[0] = np.inf
+
+    # 5) Find the 10 non‐ego indices with smallest min‐distance:
+    closest_idxs = np.argsort(min_dists)[:num_to_keep]  # array of 10 agent‐indices
+
+    # 6) Build a boolean mask of size 50:
+    mask = np.zeros(arr.shape[0], dtype=bool)
+    mask[0] = True                  # always keep ego (index 0)
+    mask[closest_idxs] = True       # keep the 10 closest non‐ego agents
+
+    # 7) Zero out everything else (in‐place or by creating a copy).
+    #arr_masked = arr * mask[:, None, None]
+
+    return arr[mask]
 
 def augment_features(scenes: np.ndarray, dt: float = 0.1) -> np.ndarray:
     """
@@ -43,6 +75,9 @@ def augment_features(scenes: np.ndarray, dt: float = 0.1) -> np.ndarray:
           omega (ang. vel),
           type ]
     """
+    scenes = mask_far_agents(scenes, num_to_keep=(NUM_AGENTS - 1))
+    #return scenes
+
     N, T, _ = scenes.shape
     pos   = scenes[..., 0:2]     # (N, T, 2)
     vel   = scenes[..., 2:4]     # (N, T, 2)
@@ -105,7 +140,7 @@ def make_dataloaders(scale, data_file, kfold=-1, full_train=False):
     if kfold == -1:
         if not full_train:
             # not applying k-fold validation, normally will take the 9:1 split
-            val_size = int(0.1 * N)
+            val_size = int(0.3 * N)
         else:
             val_size = 0
         train_size = N - val_size

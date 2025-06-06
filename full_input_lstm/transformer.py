@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import math
 
-from constants import NUM_FEATURES, FUTURE_STEPS, PREV_STEPS
+from constants import NUM_AGENTS, NUM_FEATURES, FUTURE_STEPS, PREV_STEPS
 
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding, as in Vaswani et al."""
@@ -46,8 +46,8 @@ class TwoStageTransformerPredictor(nn.Module):
         self.future_steps = future_steps
 
         # ─── embedding tables ─────────────────────────────────────────────
-        num_agents = 50
-        seq_len = 50
+        num_agents = NUM_AGENTS
+        seq_len = PREV_STEPS
 
         # Input projection + norm
         self.input_proj = nn.Linear(num_features, d_model)
@@ -95,7 +95,7 @@ class TwoStageTransformerPredictor(nn.Module):
             B = input_data.num_graphs
             # assuming x shape is (B*A, T, F)
             # reshape to (B, A, T, F)
-            n_agents, seq_len, feat = 50, PREV_STEPS, input_data.x.size(-1)
+            n_agents, seq_len, feat = NUM_AGENTS, PREV_STEPS, input_data.x.size(-1)
             x = input_data.x.view(B, n_agents, seq_len, feat)
         else:
             x = input_data  # (B, A, T, F)
@@ -106,7 +106,6 @@ class TwoStageTransformerPredictor(nn.Module):
 
         # Project to model dim
         h = self.input_proj(x)
-
         h = self.input_norm(h)            # → (B, A, T, d_model)
 
         # --- 1) Spatial: cross-agent attention per timestep ---
@@ -138,84 +137,10 @@ class TwoStageTransformerPredictor(nn.Module):
         return fut
 
 
-class AutoRegressiveMLP(nn.Module):
-    def __init__(self,
-                 num_features: int,
-                 hidden_dim: int = 512,
-                 output_dim: int = None,
-                 future_steps: int = FUTURE_STEPS):
-        """
-        :param num_features: number of input features per timestep (F)
-        :param hidden_dim:   dimensionality of the MLP’s hidden layers
-        :param output_dim:   per‐feature output dim (defaults to num_features)
-        :param future_steps: how many steps ahead to forecast (kept simple here)
-        """
-        super().__init__()
-        self.output_dim   = output_dim or num_features
-        self.future_steps = future_steps
-
-        # 1) project raw features → hidden_dim
-        self.input_proj = nn.Linear(num_features, hidden_dim)
-
-        # 2) a tiny MLP applied per “agent×time token”
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(inplace=True),
-        )
-
-        # 3) head to reconstruct each input step (optional)
-        self.reconstruct = nn.Linear(hidden_dim, self.output_dim)
-
-        # 4) head to forecast future_steps
-        self.forecast = nn.Linear(hidden_dim, future_steps * self.output_dim)
-
-    def forward(self, input_data):
-        """
-        x: Tensor of shape (B, A, T, F), or a DataBatch with .x & .num_graphs
-        returns:
-          • recon: (B, A, T, output_dim)
-          • fut  : (B, A, future_steps, output_dim)
-        """
-        # --- unpack DataBatch if needed ---
-        if hasattr(input_data, "x") and hasattr(input_data, "num_graphs"):
-            # assume every graph has A=50 agents, T=50 timesteps, F=6 features
-            B = input_data.num_graphs
-            A, T, F = 50, 50, NUM_FEATURES
-            x = input_data.x.view(B, A, T, F)
-        else:
-            x = input_data  # already (B, A, T, F)
-
-        # only keep the last 10 steps (as in your example)
-        x = x[:, :, -10:, :]       # → (B, A, T′=10, F)
-        B, A, T, F = x.shape
-
-        # 1) project & flatten agent×time into tokens
-        x = self.input_proj(x)     # → (B, A, T, hidden_dim)
-        x = x.view(B, A * T, -1)   # → (B, A*T, hidden_dim)
-
-        # 2) per‐token MLP
-        h = self.mlp(x)            # → (B, A*T, hidden_dim)
-
-        # 3) reshape back to (B, A, T, hidden_dim)
-        h = h.view(B, A, T, -1)
-
-        # 4) reconstruct
-        recon = self.reconstruct(h)   # → (B, A, T, output_dim)
-
-        # 5) forecast from the last time‐step
-        last = h[:, :, -1, :]                                     # (B, A, hidden_dim)
-        fut  = self.forecast(last)                                # (B, A, future_steps*output_dim)
-        fut  = fut.view(B, A, self.future_steps, self.output_dim) # (B, A, future_steps, output_dim)
-
-        return fut.squeeze(2)
-
-
 class LSTM(nn.Module):
-    def __init__(self, input_dim=NUM_FEATURES, hidden_dim=1024, num_layers=1, output_dim=60 * 2, dropout=0.0):
+    def __init__(self, input_dim=NUM_FEATURES, hidden_dim=256, num_layers=1, output_dim=60 * 2, dropout=0.0):
         super(LSTM, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
+        self.lstm = nn.LSTM(NUM_FEATURES * NUM_AGENTS, hidden_dim, num_layers=num_layers, batch_first=True,
                             dropout=dropout)
         self.fc = nn.Linear(hidden_dim, output_dim)
         self.test_time = False
@@ -224,16 +149,20 @@ class LSTM(nn.Module):
         if hasattr(data, "x"):
             x = data.x
             if self.test_time:
-                x = x.reshape(-1, 50, 50, NUM_FEATURES)
+                x = x.reshape(-1, NUM_AGENTS, 50, NUM_FEATURES)
             else:
-                x = x.reshape(-1, 50, PREV_STEPS, NUM_FEATURES)  # (batch_size, num_agents, seq_len, input_dim)
+                x = x.reshape(-1, NUM_AGENTS, PREV_STEPS, NUM_FEATURES)  # (batch_size, num_agents, seq_len, input_dim)
         else:
             x = data
+        x = x[:, 0, -PREV_STEPS:, :]
 
-        x = x[:, 0, -PREV_STEPS:, :] # Only Consider ego agent index 0
-        #B, A, T, F = x.shape
-        #x = x.view(B*A, T, F)
-        #x_joint = x.permute(0, 2, 1, 3).reshape(B, T, A*F)
+        # gpt-generated reshaping code
+        # 3) permute and flatten “agent” axis into the feature dimension:
+        #B, A, T, F = x.shape                      # A == self.num_agents, F == self.feat_dim
+        #    (B, T, A, F)
+        #x = x.permute(0, 2, 1, 3)
+        #    (B, T, A * F)
+        #x = x.reshape(B, T, A * F)
 
         lstm_out, _ = self.lstm(x)
         # lstm_out is of shape (batch_size, seq_len, hidden_dim) and we want the last time step output
@@ -241,131 +170,42 @@ class LSTM(nn.Module):
 
         return out.view(-1, 1, 60, 2)
 
-class GRU(nn.Module):
-    def __init__(self, input_dim=6, hidden_dim=256, num_layers=1, output_dim=60 * 6, dropout=0.0):
-        super(GRU, self).__init__()
-        self.lstm = nn.GRU(input_dim, hidden_dim, num_layers=num_layers, batch_first=True,
-                            dropout=dropout)
-        self.fc = nn.Linear(hidden_dim, output_dim)
-
-    def forward(self, data):
-        if hasattr(data, "x"):
-            x = data.x
-            x = x.reshape(-1, 50, 50, 6)  # (batch_size, num_agents, seq_len, input_dim)
-        else:
-            x = data
-        x = x[:, 0, :, :] # Only Consider ego agent index 0
-        #B, A, T, F = x.shape
-        #x = x.view(B*A, T, F)
-        #x_joint = x.permute(0, 2, 1, 3).reshape(B, T, A*F)
-
-        lstm_out, _ = self.lstm(x)
-        # lstm_out is of shape (batch_size, seq_len, hidden_dim) and we want the last time step output
-        out = self.fc(lstm_out[:, -1, :])
-
-        return out.view(-1, 1, 60, 6)
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
 
-class TSTD(nn.Module):
-    def __init__(self,
-                 num_features: int,
-                 d_model: int = 64,
-                 nhead: int = 4,
-                 num_layers_spatial: int = 1,
-                 num_layers_temporal: int = 1,
-                 num_layers_decoder: int = 1,
-                 dim_feedforward: int = 128,
-                 dropout: float = 0.1,
-                 future_steps: int = 60,
-                 output_dim: int = 6):
+class SimpleEncoder(nn.Module):
+    def __init__(self, num_agents: int, feat_dim: int, emb_dim: int):
+        """
+        Encoder that maps each time‐step’s (A*F) input → a lower‐dimensional embedding of size emb_dim.
+
+        Args:
+            num_agents (int):  A (number of agents)
+            feat_dim   (int):  F (number of features per agent)
+            emb_dim    (int):  D (desired embedding size per time‐step)
+        """
         super().__init__()
-        self.future_steps = future_steps
-        self.output_dim   = output_dim
+        self.input_dim = num_agents * feat_dim   # A * F
+        self.emb_dim   = emb_dim
 
-        # ── encoder ────────────────────────────
-        self.input_proj  = nn.Linear(num_features, d_model)
-        self.input_norm  = nn.LayerNorm(d_model)
+        # A two‐layer MLP (you can remove the second layer if you want even simpler)
+        self.fc1 = nn.Linear(self.input_dim, emb_dim)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(emb_dim, emb_dim)
 
-        # spatial (cross-agent) and temporal encoders (as before)…
-        spatial_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation='gelu')
-        self.spatial_encoder = nn.TransformerEncoder(spatial_layer, num_layers_spatial)
-        self.spatial_norm    = nn.LayerNorm(d_model)
-
-        self.time_pos_enc = PositionalEncoding(d_model)
-
-        temporal_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, activation='gelu')
-        self.temporal_encoder = nn.TransformerEncoder(temporal_layer, num_layers_temporal)
-        self.temporal_norm    = nn.LayerNorm(d_model)
-
-        # ── decoder ────────────────────────────
-        # each layer does: self-attend on past preds + cross-attend to encoder memory
-        decoder_layer = nn.TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout, activation='gelu')
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers_decoder)
-        self.dec_pos_enc = PositionalEncoding(d_model)
-
-        # final projection from d_model to 2D displacement
-        self.output_proj = nn.Linear(d_model, output_dim)
-
-
-    def forward(self, input_data, memory=None, teacher_forcing=None):
+    def forward(self, x_flat: torch.Tensor) -> torch.Tensor:
         """
-        x:       (B, A, T, F) historical features
-        memory:  optional precomputed encoder output
-        teacher_forcing: if not None, a tensor of shape (B, A, future_steps, output_dim)
-                         giving the *ground-truth* future displacements to feed into the decoder.
+        Args:
+            x_flat: shape (B, T, A*F)
+
+        Returns:
+            emb:   shape (B, T, D)
         """
-        if hasattr(input_data, "x") and hasattr(input_data, "num_graphs"):
-            # assume every graph has A=50 agents, T=50 timesteps, F=6 features
-            B = input_data.num_graphs
-            A, T, F = 50, 50, 6
-            x = input_data.x.view(B, A, T, F)
-        else:
-            x = input_data  # already (B, A, T, F)
+        B, T, _ = x_flat.shape              # _ == A*F
+        # Flatten batch & time to run through the same fc layers:
+        x2d = x_flat.view(B * T, self.input_dim)   # → (B*T, A*F)
 
-        B, A, T, F = x.shape
-        # 1) encode history exactly as before
-        h = self.input_norm(self.input_proj(x))                                 # (B, A, T, d)
-        # spatial …
-        h_sp = h.view(B*T, A, -1).transpose(0,1)                                 # (A, B*T, d)
-        h_sp = self.spatial_encoder(h_sp).transpose(0,1).view(B, A, T, -1)       # (B, A, T, d)
-        h_sp = self.spatial_norm(h_sp)
-        # temporal …
-        h_tm = h_sp.permute(0,2,1,3).reshape(B*A, T, -1)                         # (B*A, T, d)
-        h_tm = h_tm + self.time_pos_enc(h_tm)                                    # add pos-enc
-        h_tm = self.temporal_encoder(h_tm.transpose(0,1)).transpose(0,1)         # (B*A, T, d)
-        h_tm = self.temporal_norm(h_tm).view(B, A, T, -1)                        # (B, A, T, d)
+        h = self.relu(self.fc1(x2d))        # (B*T, D)
+        h = self.relu(self.fc2(h))          # (B*T, D)
 
-        # flatten agents into batch dimension
-        memory = h_tm.reshape(B*A, T, -1).transpose(0,1)  if memory is None else memory
-        # now memory: (T, B*A, d_model)
-
-        # 2) prepare decoder inputs
-        # if teacher_forcing is given, use its *shifted* ground-truth past
-        if teacher_forcing is not None:
-            # teacher_forcing: (B, A, future_steps, 2)
-            # project to d_model
-            tf = teacher_forcing.reshape(B*A, self.future_steps, self.output_dim)
-            # embed & add pos enc
-            tgt = nn.Linear(self.output_dim, memory.size(-1)).to(x.device)(tf)
-            tgt = tgt + self.dec_pos_enc(tgt)
-            tgt = tgt.transpose(0,1)  # → (future_steps, B*A, d_model)
-        else:
-            # inference mode: start from zeros
-            tgt = torch.zeros(self.future_steps, B*A, memory.size(-1), device=x.device)
-            tgt = tgt + self.dec_pos_enc(tgt)
-
-        # 3) build causal mask so each decoder step can only see earlier steps
-        mask = nn.Transformer.generate_square_subsequent_mask(self.future_steps).to(x.device)
-
-        # 4) decode
-        dec_out = self.decoder(tgt, memory, tgt_mask=mask)   # (future_steps, B*A, d_model)
-
-        # 5) project to 2D displacements & reshape
-        preds = self.output_proj(dec_out)                    # (future_steps, B*A, 2)
-        preds = preds.transpose(0,1).view(B, A, self.future_steps, -1)
-
-        return preds
+        return h.view(B, T, self.emb_dim)   # → (B, T, D)
 
